@@ -1,0 +1,23 @@
+[
+  {
+    "name": "lookup_existing_user",
+    "input": "What is the email address for user 12345?",
+    "expected_contains": ["ada@example.com"],
+    "expected_status": "ok",
+    "must_call_tools": ["get_user"]
+  },
+  {
+    "name": "handle_missing_user",
+    "input": "Look up user 99999 and tell me their name. If they don't exist, say so explicitly.",
+    "expected_contains": ["not", "found"],
+    "expected_status": "ok",
+    "must_call_tools": ["get_user"]
+  },
+  {
+    "name": "no_tool_needed",
+    "input": "What is 2 + 2? Answer directly without calling any tools.",
+    "expected_contains": ["4"],
+    "expected_status": "ok",
+    "must_not_call_tools": ["get_user"]
+  }
+]
