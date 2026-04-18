@@ -838,6 +838,36 @@ Progress lines are also written to the trace as `progress` events for post-hoc r
 - PDF extraction
 - Subagent split if volume grows past single-context viability
 
+### V2 deployment target: AWS + Bedrock
+
+V1 runs CLI-local with the direct Anthropic API. V2 deploys to AWS and migrates model access to Amazon Bedrock.
+
+**AWS deployment architecture** (commercial AWS is sufficient — this workload handles no CUI; GovCloud only needed if this system interconnects with one that does):
+
+- **Runtime:** Lambda (90s runs fit comfortably under the 15-min max) or Fargate for longer flows. API Gateway fronting for v2 HubSpot enrichment surface.
+- **Persistence:** S3 with Object Lock + SSE-KMS for brief and trace artifacts, replacing local `./runs/`. Object Lock gives genuine WORM — stronger than the SHA-256 hash chain alone.
+- **Secrets:** Secrets Manager for third-party keys (SAM.gov); IAM role assumption for Bedrock (no `ANTHROPIC_API_KEY` needed on AWS).
+- **Audit:** CloudTrail + encrypted CloudWatch log groups — clean mapping to NIST SP 800-171 AU-3 / AU-9.
+- **Egress:** VPC + NAT + Security Groups; PrivateLink endpoint for Bedrock keeps model traffic off the public internet entirely.
+- **IaC:** CDK (Python) or Terraform for reproducible infrastructure (CMMC assessors like this).
+
+**Bedrock migration rationale:**
+
+- **Compliance inheritance.** AWS's existing BAA/DPA already covers Bedrock usage. This collapses §7.3.D (Anthropic DPA blocker) from a v1 blocker to a moot question in v2.
+- **IAM replaces API keys.** Lambda execution role assumes Bedrock invocation permission; one less secret to rotate, one less exfiltration target.
+- **CloudTrail-native audit log** for every model invocation.
+- **Traffic stays inside AWS** via VPC endpoints (PrivateLink).
+
+**Must-verify before the Bedrock switch:**
+
+- **Claude Opus 4.x availability on Bedrock** in the target region. Bedrock historically lags direct Anthropic by weeks-to-months on new model versions. Opus 4.6 is likely a safe fallback if 4.7 isn't yet on Bedrock.
+- **Native `web_search` tool (§4.2) availability on Bedrock.** This is the real gotcha. If absent, options are: (a) substitute a search vendor called from our own tool code (Tavily / Brave / Exa — re-introduces an external vendor; partially undoes the compliance win), (b) defer web-search to v2.5 once Bedrock parity lands, or (c) accept reduced recall and lean harder on `fetch_company_page` + federal-data tools.
+- **Region scope.** Confirm target workload region has the Claude model needed.
+
+**V1 enabler (small change to the implementation plan — belongs in the implementation session, not the spec):**
+
+Implement an `llm_client` abstraction layer in v1 that wraps model invocation. Both Anthropic's SDK (`messages.create`) and Bedrock's `converse` API are essentially feature-compatible for Claude. Keeping this seam small in v1 makes the v2 swap a single-file change, not a refactor.
+
 ### Live risks to monitor in eval runs
 
 - **Anthropic safety-filter refusals on defense-vertical queries** (§4.2 P7) — if refusal rate on goldens exceeds 10%, query patterns need rewrite (never jailbreaking).
