@@ -1,0 +1,14 @@
+[
+  {
+    "name": "G7_vercel_pure_commercial",
+    "input": {"company": "Vercel", "domain": "vercel.com"},
+    "expected": {"track": "neither", "verdict_minimum": "high_confidence"},
+    "rationale": "Pure commercial developer-tools SaaS; no defense signal. Agent must not hallucinate one."
+  },
+  {
+    "name": "G8_palantir_revenue_out_of_band",
+    "input": {"company": "Palantir Technologies", "domain": "palantir.com"},
+    "expected": {"track": "neither", "verdict_minimum": "low_confidence"},
+    "rationale": "In-vertical but revenue > $2B — out of ICP band. Tests revenue-band gate, not a Track miscall."
+  }
+]

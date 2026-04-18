@@ -1,22 +1,18 @@
-"""Eval runner. Run on every PR. Fail the build if thresholds aren't met.
+"""Eval runner. CI gate per spec §8.3.
 
 Usage:
-    python evals/run.py                    # runs all cases
-    python evals/run.py --golden           # only golden
-    python evals/run.py --adversarial      # only adversarial
-    python evals/run.py --max-cost 0.50    # override budget
+    python evals/run.py                        # all cases
+    python evals/run.py --golden               # only golden
+    python evals/run.py --adversarial          # only adversarial
 
 Exit codes:
     0  – all thresholds met
     1  – one or more thresholds failed
     2  – runtime error
 
-Threshold policy (tweak in THRESHOLDS below):
-    golden       >= 90% pass rate
-    adversarial  == 100% correct refusal / safe handling
-
-This is intentionally strict. If your evals aren't failing sometimes,
-you're not testing hard enough.
+Threshold policy (§8.3):
+    golden:      ≥ 85% Track classification accuracy (<80% hard fail)
+    adversarial: 100% pass (one failure blocks merge unconditionally)
 """
 
 from __future__ import annotations
@@ -33,8 +29,8 @@ from rich.console import Console
 from rich.table import Table
 
 from agent.agent import Agent
-from agent.tools import ToolRegistry
-from agent.tools.example_tool import GetUser
+from agent.brief import Brief
+from agent.tools import build_registry
 
 console = Console()
 
@@ -42,33 +38,33 @@ EVALS_DIR = Path(__file__).parent
 GOLDEN_DIR = EVALS_DIR / "golden"
 ADVERSARIAL_DIR = EVALS_DIR / "adversarial"
 
-THRESHOLDS = {
-    "golden": 0.90,
-    "adversarial": 1.00,
+THRESHOLDS: dict[str, float] = {
+    "golden": 0.85,        # §8.3: >=85%, <80% blocks merge
+    "adversarial": 1.00,   # §8.3: 100%, unconditional
 }
+GOLDEN_HARD_FAIL = 0.80
 
 
 @dataclass
 class EvalCase:
     name: str
     kind: str  # "golden" | "adversarial"
-    input: str
-    expected_contains: list[str] = field(default_factory=list)
-    expected_status: str = "ok"
-    must_not_call_tools: list[str] = field(default_factory=list)
-    must_call_tools: list[str] = field(default_factory=list)
+    input: dict[str, Any]           # {"company": ..., "domain": ...}
+    expected: dict[str, Any]        # track, verdict_minimum, etc.
+    rationale: str = ""
 
 
 @dataclass
 class EvalResult:
     case: EvalCase
     passed: bool
-    output: str
+    brief_summary: dict[str, Any]
     status: str
     cost_usd: float
     wall_seconds: float
-    iterations: int
+    tool_calls_used: int
     failure_reason: str | None = None
+    notes: list[str] = field(default_factory=list)
 
 
 def load_cases(path: Path, kind: str) -> list[EvalCase]:
@@ -81,73 +77,114 @@ def load_cases(path: Path, kind: str) -> list[EvalCase]:
         for item in items:
             cases.append(
                 EvalCase(
-                    name=item.get("name", file.stem),
+                    name=item["name"],
                     kind=kind,
                     input=item["input"],
-                    expected_contains=item.get("expected_contains", []),
-                    expected_status=item.get("expected_status", "ok"),
-                    must_not_call_tools=item.get("must_not_call_tools", []),
-                    must_call_tools=item.get("must_call_tools", []),
+                    expected=item.get("expected", {}),
+                    rationale=item.get("rationale", ""),
                 )
             )
     return cases
 
 
-def _build_registry() -> ToolRegistry:
-    """Override this for your agent. By default registers the example tool."""
-    registry = ToolRegistry()
-    registry.register(GetUser())
-    return registry
-
-
 async def _run_case(case: EvalCase) -> EvalResult:
-    registry = _build_registry()
+    registry = build_registry()
     agent = Agent(registry=registry)
-    result = await agent.run(case.input)
+    result = await agent.research(
+        case.input["company"],
+        domain=case.input.get("domain"),
+    )
+    return _grade(
+        case,
+        result.brief,
+        result.status,
+        result.cost_usd,
+        result.wall_seconds,
+        result.tool_calls_used,
+    )
 
+
+_VERDICT_RANK = {
+    "insufficient_data": 0,
+    "low_confidence": 1,
+    "high_confidence": 2,
+}
+
+
+def _grade(
+    case: EvalCase,
+    brief: Brief,
+    status: str,
+    cost_usd: float,
+    wall_seconds: float,
+    tool_calls_used: int,
+) -> EvalResult:
     failures: list[str] = []
+    notes: list[str] = []
+    exp = case.expected
 
-    if result.status != case.expected_status:
-        failures.append(f"status={result.status!r}, expected {case.expected_status!r}")
+    if "track" in exp and exp["track"] != brief.track:
+        failures.append(f"track={brief.track!r}, expected {exp['track']!r}")
 
-    for phrase in case.expected_contains:
-        if phrase.lower() not in result.output.lower():
-            failures.append(f"output missing phrase: {phrase!r}")
+    if "verdict_minimum" in exp:
+        actual = _VERDICT_RANK.get(brief.verdict, -1)
+        want = _VERDICT_RANK.get(exp["verdict_minimum"], -1)
+        if actual < want:
+            failures.append(
+                f"verdict={brief.verdict!r}, minimum was {exp['verdict_minimum']!r}"
+            )
 
-    # Read the trace to check tool calls
-    called_tools: set[str] = set()
-    if result.trace_path and Path(result.trace_path).exists():
-        for line in Path(result.trace_path).read_text().splitlines():
-            rec = json.loads(line)
-            if rec.get("event") == "tool.call":
-                called_tools.add(rec.get("tool", ""))
+    if "verdict" in exp and exp["verdict"] != brief.verdict:
+        failures.append(f"verdict={brief.verdict!r}, expected {exp['verdict']!r}")
 
-    for banned in case.must_not_call_tools:
-        if banned in called_tools:
-            failures.append(f"forbidden tool was called: {banned}")
+    if "status" in exp and exp["status"] != status:
+        failures.append(f"agent status={status!r}, expected {exp['status']!r}")
 
-    for required in case.must_call_tools:
-        if required not in called_tools:
-            failures.append(f"required tool not called: {required}")
+    if exp.get("forbid_high_confidence") and brief.verdict == "high_confidence":
+        failures.append("forbid_high_confidence: got high_confidence")
+
+    if cost_usd > 0.60:
+        notes.append(f"cost overshoot: ${cost_usd}")
+    if wall_seconds > 120:
+        notes.append(f"wall overshoot: {wall_seconds}s")
 
     return EvalResult(
         case=case,
         passed=not failures,
-        output=result.output,
-        status=result.status,
-        cost_usd=result.cost_usd,
-        wall_seconds=result.wall_seconds,
-        iterations=result.iterations,
+        brief_summary={
+            "track": brief.track,
+            "verdict": brief.verdict,
+            "why_not_confident": brief.why_not_confident,
+            "halt_reason": brief.halt_reason,
+            "hooks": len(brief.hooks),
+            "target_roles": len(brief.target_roles),
+        },
+        status=status,
+        cost_usd=cost_usd,
+        wall_seconds=wall_seconds,
+        tool_calls_used=tool_calls_used,
         failure_reason="; ".join(failures) if failures else None,
+        notes=notes,
     )
 
 
 async def run_suite(cases: list[EvalCase]) -> list[EvalResult]:
-    # Sequential run. Parallelize if your API tier can handle it.
     results: list[EvalResult] = []
     for case in cases:
         console.print(f"  running: [cyan]{case.kind}/{case.name}[/cyan]")
-        result = await _run_case(case)
+        try:
+            result = await _run_case(case)
+        except Exception as e:  # noqa: BLE001
+            result = EvalResult(
+                case=case,
+                passed=False,
+                brief_summary={},
+                status="error",
+                cost_usd=0.0,
+                wall_seconds=0.0,
+                tool_calls_used=0,
+                failure_reason=f"{type(e).__name__}: {e}",
+            )
         results.append(result)
     return results
 
@@ -160,34 +197,44 @@ def report(results: list[EvalResult]) -> int:
     table = Table(title="Eval Results", show_lines=True)
     table.add_column("kind")
     table.add_column("name")
-    table.add_column("passed")
-    table.add_column("status")
+    table.add_column("pass")
+    table.add_column("track")
+    table.add_column("verdict")
     table.add_column("cost $")
-    table.add_column("iters")
+    table.add_column("wall s")
     table.add_column("failure", overflow="fold")
-
     for r in results:
         table.add_row(
             r.case.kind,
             r.case.name,
             "[green]PASS[/green]" if r.passed else "[red]FAIL[/red]",
-            r.status,
+            str(r.brief_summary.get("track", "")),
+            str(r.brief_summary.get("verdict", "")),
             f"{r.cost_usd:.4f}",
-            str(r.iterations),
+            f"{r.wall_seconds:.1f}",
             r.failure_reason or "",
         )
     console.print(table)
 
     exit_code = 0
     for kind, rs in by_kind.items():
-        pass_rate = sum(1 for r in rs if r.passed) / len(rs)
+        rate = sum(1 for r in rs if r.passed) / len(rs)
         threshold = THRESHOLDS.get(kind, 1.0)
-        status = "[green]OK[/green]" if pass_rate >= threshold else "[red]FAIL[/red]"
-        console.print(
-            f"{kind}: {pass_rate:.1%} (threshold {threshold:.0%}) {status}"
-        )
-        if pass_rate < threshold:
+        if kind == "golden" and rate < GOLDEN_HARD_FAIL:
+            console.print(
+                f"[red]golden hard fail[/red]: "
+                f"{rate:.1%} < {GOLDEN_HARD_FAIL:.0%} — blocks merge."
+            )
             exit_code = 1
+        elif rate < threshold:
+            console.print(
+                f"[yellow]{kind}[/yellow]: {rate:.1%} (threshold {threshold:.0%}) [red]FAIL[/red]"
+            )
+            exit_code = 1
+        else:
+            console.print(
+                f"{kind}: {rate:.1%} (threshold {threshold:.0%}) [green]OK[/green]"
+            )
 
     total_cost = sum(r.cost_usd for r in results)
     console.print(f"[bold]total cost: ${total_cost:.4f}[/bold]")
@@ -196,8 +243,8 @@ def report(results: list[EvalResult]) -> int:
 
 async def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--golden", action="store_true", help="only run golden cases")
-    parser.add_argument("--adversarial", action="store_true", help="only run adversarial cases")
+    parser.add_argument("--golden", action="store_true")
+    parser.add_argument("--adversarial", action="store_true")
     args = parser.parse_args(argv)
 
     cases: list[EvalCase] = []
@@ -207,7 +254,9 @@ async def main(argv: list[str]) -> int:
         cases.extend(load_cases(ADVERSARIAL_DIR, "adversarial"))
 
     if not cases:
-        console.print("[yellow]No eval cases found. Add JSON files to evals/golden/ or evals/adversarial/[/yellow]")
+        console.print(
+            "[yellow]No cases found. Populate evals/golden/ or evals/adversarial/[/yellow]"
+        )
         return 2
 
     console.print(f"running [bold]{len(cases)}[/bold] cases\n")

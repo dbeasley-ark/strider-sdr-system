@@ -1,0 +1,20 @@
+[
+  {
+    "name": "G1_anduril",
+    "input": {"company": "Anduril Industries", "domain": "anduril.com"},
+    "expected": {"track": "track_1", "verdict_minimum": "high_confidence"},
+    "rationale": "Multiple active DoD primes (Replicator, Lattice, CCA); clear sponsorship; revenue in-band."
+  },
+  {
+    "name": "G2_shield_ai",
+    "input": {"company": "Shield AI", "domain": "shield.ai"},
+    "expected": {"track": "track_1", "verdict_minimum": "high_confidence"},
+    "rationale": "V-BAT fielded with Navy + USCG; Hivemind ATO; ~$500M ARR."
+  },
+  {
+    "name": "G3_epirus",
+    "input": {"company": "Epirus", "domain": "epirusinc.com"},
+    "expected": {"track": "track_1", "verdict_minimum": "high_confidence"},
+    "rationale": "Leonidas HPM fielded with Army; revenue in-band."
+  }
+]

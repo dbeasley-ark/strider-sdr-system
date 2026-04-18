@@ -1,0 +1,14 @@
+[
+  {
+    "name": "G9_saronic_borderline",
+    "input": {"company": "Saronic Technologies", "domain": "saronic.com"},
+    "expected": {"track": "track_1", "verdict_minimum": "low_confidence"},
+    "rationale": "Autonomous surface vessels; recent Navy contracts + SBIR history; classification may shift toward Track 1. Tests whether agent updates from current-year data."
+  },
+  {
+    "name": "G10_hadrian_dual_use",
+    "input": {"company": "Hadrian", "domain": "hadrian.co"},
+    "expected": {"track": "track_2", "verdict_minimum": "low_confidence"},
+    "rationale": "Defense manufacturing; commercial + DoD mix; dual-use poster child. Tests >50%-defense-signal gate."
+  }
+]

@@ -8,6 +8,7 @@ from agent.reliability.circuit_breaker import (
     CircuitBreaker,
     CircuitOpenError,
 )
+from agent.reliability.rate_limit import RateLimitTimeout, TokenBucket
 from agent.reliability.retry import TransientError, with_retry
 from agent.reliability.timeouts import ToolTimeoutError, with_timeout
 
@@ -15,6 +16,8 @@ __all__ = [
     "BreakerState",
     "CircuitBreaker",
     "CircuitOpenError",
+    "RateLimitTimeout",
+    "TokenBucket",
     "ToolTimeoutError",
     "TransientError",
     "with_retry",

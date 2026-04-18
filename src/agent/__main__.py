@@ -1,40 +1,128 @@
-"""Demo entry point. Run: `python -m agent`
+"""CLI entry point for the prospect-research agent.
 
-Wires up the example tool and sends a trivial goal through the loop.
-This is a smoke test — replace with your own entry points.
+Usage:
+    python -m agent --company "Shield AI"
+    python -m agent --company shield.ai --domain shield.ai
+    python -m agent --company "Hadrian" --json
+
+Writes brief + trace to ./runs/<slug>/<ts>/ (see spec §2, §3).
+Streams progress to stderr (§9). Final brief goes to stdout as JSON
+by default so the CLI composes cleanly with other tools.
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
+import json
+import sys
+import time
+from pathlib import Path
 
-from rich import print
+from rich.console import Console
 
 from agent.agent import Agent
-from agent.security.permissions import PermissionScope
-from agent.tools import ToolRegistry
-from agent.tools.example_tool import GetUser
+from agent.observability.tracing import new_run_dir, slugify
+from agent.tools import build_registry
+
+stderr = Console(stderr=True)
 
 
-async def main() -> None:
-    registry = ToolRegistry()
-    registry.register(GetUser())
+def _build_progress(started: float):
+    """Return a callable that streams timestamped progress lines to stderr."""
 
-    scope = PermissionScope(name="demo", allow_list={"get_user"})
+    def _emit(msg: str) -> None:
+        elapsed = time.monotonic() - started
+        stderr.print(f"[dim][{elapsed:5.1f}s][/dim] {msg}")
 
-    agent = Agent(registry=registry, scope=scope)
-    result = await agent.run("What is the email address for user 12345?")
+    return _emit
 
-    print("\n[bold]=== RESULT ===[/bold]")
-    print(f"status:       {result.status}")
-    print(f"iterations:   {result.iterations}")
-    print(f"wall time:    {result.wall_seconds}s")
-    print(f"cost:         ${result.cost_usd}")
-    print(f"trace:        {result.trace_path}")
-    print(f"\n[bold]output:[/bold]\n{result.output}")
-    if result.error:
-        print(f"\n[red]error:[/red] {result.error}")
+
+async def _main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="python -m agent",
+        description="Arkenstone prospect-research agent — classify a company against Track 1 / Track 2 ICP.",
+    )
+    parser.add_argument(
+        "--company",
+        required=True,
+        help="Company name or domain (e.g., 'Shield AI' or 'shield.ai').",
+    )
+    parser.add_argument(
+        "--domain",
+        default=None,
+        help="Optional explicit domain hint. Improves URL allowlist seeding.",
+    )
+    parser.add_argument(
+        "--run-dir",
+        default=None,
+        help=(
+            "Override the run output directory. Default: "
+            "./runs/<company-slug>/<ts>/"
+        ),
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the brief as JSON to stdout (default behavior — kept for explicit intent).",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress progress lines on stderr.",
+    )
+    args = parser.parse_args(argv)
+
+    started = time.monotonic()
+    progress = None if args.quiet else _build_progress(started)
+
+    run_dir = Path(args.run_dir) if args.run_dir else new_run_dir(args.domain or args.company)
+    registry = build_registry()
+    agent = Agent(registry=registry)
+
+    result = await agent.research(
+        args.company,
+        domain=args.domain,
+        run_dir=run_dir,
+        progress=progress,
+    )
+
+    # Brief to stdout, run dir path and summary to stderr.
+    stdout_payload = result.brief.model_dump(mode="json")
+    print(json.dumps(stdout_payload, indent=2, default=str))
+
+    if not args.quiet:
+        stderr.print(
+            f"\n[bold]=== RESULT ===[/bold]\n"
+            f"status:      {result.status}\n"
+            f"track:       {result.brief.track}\n"
+            f"verdict:     {result.brief.verdict}\n"
+            f"tool calls:  {result.tool_calls_used}/{result.brief.tool_calls_budget}\n"
+            f"wall:        {result.wall_seconds}s\n"
+            f"cost:        ${result.cost_usd}\n"
+            f"run dir:     {result.run_dir}\n"
+        )
+        if result.error:
+            stderr.print(f"[red]error:[/red] {result.error}")
+
+    # Exit codes: 0 ok, 1 insufficient/budget halts, 2 hard error/compliance stop.
+    if result.status == "ok":
+        return 0
+    if result.status in ("error", "compliance_hard_stop"):
+        return 2
+    return 1
+
+
+def main() -> None:
+    try:
+        sys.exit(asyncio.run(_main(sys.argv[1:])))
+    except KeyboardInterrupt:
+        stderr.print("[yellow]interrupted[/yellow]")
+        sys.exit(130)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
+
+# Silence unused-import warnings; keep these available for `python -c` one-liners.
+_unused = (slugify,)
