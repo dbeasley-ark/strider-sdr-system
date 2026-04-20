@@ -22,6 +22,11 @@ traces/
 eval_results/
 *.jsonl.gz
 
+# Agent run output and sales UI
+runs/
+sales-ui/node_modules/
+sales-ui/dist/
+
 # IDE
 .vscode/
 .idea/

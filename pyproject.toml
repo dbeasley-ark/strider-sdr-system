@@ -22,6 +22,12 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.10",
 ]
+ui = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "python-multipart>=0.0.9",
+    "openpyxl>=3.1.0",
+]
 rag = [
     "voyageai>=0.2",       # or swap for openai, cohere, sentence-transformers
     "numpy>=1.26",
@@ -29,6 +35,9 @@ rag = [
 mcp = [
     "mcp>=1.0",
 ]
+
+[project.scripts]
+prospect-sales-ui = "agent.sales_app:main"
 
 [build-system]
 requires = ["hatchling"]
