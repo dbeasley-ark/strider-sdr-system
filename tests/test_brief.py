@@ -69,6 +69,17 @@ def test_insufficient_data_helper() -> None:
     assert b.hooks == []
 
 
+def test_insufficient_data_max_output_tokens_halt() -> None:
+    b = insufficient_data(
+        run_id="r",
+        generated_at=datetime.now(timezone.utc),
+        company_name_queried="X",
+        why="model output hit max_tokens (8192)",
+        halt_reason="max_output_tokens_exhausted",
+    )
+    assert b.halt_reason == "max_output_tokens_exhausted"
+
+
 def test_target_role_caps_hooks_at_8() -> None:
     hooks = [
         PersonalizationHook(

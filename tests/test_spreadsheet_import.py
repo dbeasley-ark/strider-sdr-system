@@ -57,3 +57,9 @@ def test_empty_company_rows_skipped() -> None:
 def test_bad_extension() -> None:
     with pytest.raises(SpreadsheetParseError):
         parse_prospect_spreadsheet(b"a", filename="x.bin")
+
+
+def test_parse_txt_as_csv() -> None:
+    raw = b"Company\nDelta Co\n"
+    sheet = parse_prospect_spreadsheet(raw, filename="export.txt")
+    assert sheet.rows == [("Delta Co", None)]

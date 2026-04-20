@@ -140,8 +140,22 @@ class LookupSamRegistration(Tool[LookupSamRegistrationInput, LookupSamRegistrati
         now = datetime.utcnow()
         query = inputs.recipient_name.strip()
 
+        api_key = settings.sam_gov_api_key.get_secret_value().strip()
+        if not api_key:
+            return LookupSamRegistrationOutput(
+                recipient_name_query=query,
+                identity_resolution="not_found",
+                records_found=0,
+                records=[],
+                fetched_at=now,
+                error=(
+                    "SAM.gov lookup skipped: no SAM_GOV_API_KEY. "
+                    "Use web_search for company signal; set a key when available."
+                ),
+            )
+
         params: dict[str, Any] = {
-            "api_key": settings.sam_gov_api_key.get_secret_value(),
+            "api_key": api_key,
             "samRegistered": "Yes" if not inputs.include_inactive else "All",
         }
         if inputs.uei:

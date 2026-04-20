@@ -17,15 +17,31 @@ import asyncio
 import json
 import sys
 import time
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 
 from rich.console import Console
 
 from agent.agent import Agent
+from agent.brief import insufficient_data
 from agent.observability.tracing import new_run_dir, slugify
 from agent.tools import build_registry
 
 stderr = Console(stderr=True)
+
+
+def _peek_company_argv(argv: list[str]) -> str:
+    """Best-effort company name for fatal-error briefs (argv before full parse)."""
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok == "--company" and i + 1 < len(argv):
+            return argv[i + 1]
+        if tok.startswith("--company="):
+            return tok.split("=", 1)[1]
+        i += 1
+    return "(unknown)"
 
 
 def _build_progress(started: float):
@@ -114,11 +130,26 @@ async def _main(argv: list[str]) -> int:
 
 
 def main() -> None:
+    argv = sys.argv[1:]
     try:
-        sys.exit(asyncio.run(_main(sys.argv[1:])))
+        code = asyncio.run(_main(argv))
     except KeyboardInterrupt:
         stderr.print("[yellow]interrupted[/yellow]")
         sys.exit(130)
+    except Exception as e:
+        stderr.print(f"[red]fatal:[/red] {type(e).__name__}: {e}")
+        company = _peek_company_argv(argv)
+        brief = insufficient_data(
+            run_id=str(uuid.uuid4()),
+            generated_at=datetime.now(UTC),
+            company_name_queried=company,
+            why=f"Unhandled error before a normal brief was written: {type(e).__name__}: {e}",
+            halt_reason="internal_error",
+        )
+        print(json.dumps(brief.model_dump(mode="json"), indent=2, default=str))
+        sys.exit(1)
+    else:
+        sys.exit(code)
 
 
 if __name__ == "__main__":

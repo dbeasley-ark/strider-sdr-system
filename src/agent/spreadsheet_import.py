@@ -120,7 +120,7 @@ def parse_prospect_spreadsheet(
 ) -> ParsedSheet:
     """Parse CSV or XLSX. Headers must be in the first row."""
     suffix = Path(filename).suffix.lower()
-    if suffix == ".csv":
+    if suffix in {".csv", ".txt"}:
         headers, data = _read_rows_csv(raw)
     elif suffix in {".xlsx", ".xlsm"}:
         headers, data = _read_rows_xlsx(raw)

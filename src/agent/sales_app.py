@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import sys
@@ -31,6 +32,8 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from agent.spreadsheet_import import ParsedSheet, SpreadsheetParseError, parse_prospect_spreadsheet
+
+logger = logging.getLogger(__name__)
 
 
 def _repo_root() -> Path:
@@ -85,6 +88,40 @@ class BatchJob:
 
 JOBS: dict[str, BatchJob] = {}
 JOBS_LOCK = asyncio.Lock()
+
+# Agent CLI: 0 ok, 1 halted/insufficient, 2 error/compliance — all may print a Brief.
+_AGENT_OK_EXIT_CODES = frozenset({0, 1, 2})
+
+
+def _try_parse_brief_stdout(stdout_text: str) -> dict[str, Any] | None:
+    """Parse a Brief-shaped dict from agent stdout.
+
+    The agent prints one JSON object; tolerate leading noise (e.g. log lines)
+    by scanning for ``{`` and using ``json.JSONDecoder.raw_decode``.
+    """
+    s = stdout_text.strip()
+    if not s:
+        return None
+    decoder = json.JSONDecoder()
+    candidates: list[dict[str, Any]] = []
+
+    try:
+        head = json.loads(s)
+        if isinstance(head, dict) and "track" in head and "verdict" in head:
+            return head
+    except json.JSONDecodeError:
+        pass
+
+    for i, ch in enumerate(s):
+        if ch != "{":
+            continue
+        try:
+            obj, _end = decoder.raw_decode(s, i)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and "track" in obj and "verdict" in obj:
+            candidates.append(obj)
+    return candidates[-1] if candidates else None
 
 
 async def _append_event(job: BatchJob, event: dict[str, Any]) -> None:
@@ -161,8 +198,30 @@ async def _run_batch(job_id: str) -> None:
         stderr_text = stderr_b.decode("utf-8", errors="replace").strip()
         stdout_text = stdout_b.decode("utf-8", errors="replace").strip()
         run_dir_m = re.search(r"run dir:\s+(\S+)", stderr_text, re.IGNORECASE)
+        brief = _try_parse_brief_stdout(stdout_text)
 
-        if proc.returncode not in (0, 1):
+        if brief is not None:
+            row.status = "ok"
+            row.exit_code = proc.returncode
+            row.brief = brief
+            row.run_dir = run_dir_m.group(1) if run_dir_m else None
+            await _append_event(
+                job,
+                {
+                    "type": "row_complete",
+                    "index": row.index,
+                    "company": row.company,
+                    "domain": row.domain,
+                    "status": "ok",
+                    "exit_code": proc.returncode,
+                    "track": brief.get("track"),
+                    "verdict": brief.get("verdict"),
+                    "brief": brief,
+                },
+            )
+            continue
+
+        if proc.returncode not in _AGENT_OK_EXIT_CODES:
             row.status = "error"
             row.exit_code = proc.returncode
             row.error = stderr_text or f"exit {proc.returncode}"
@@ -180,29 +239,30 @@ async def _run_batch(job_id: str) -> None:
             )
             continue
 
-        try:
-            brief = json.loads(stdout_text) if stdout_text else None
-        except json.JSONDecodeError:
-            row.status = "error"
-            row.exit_code = proc.returncode
-            row.error = "Agent stdout was not valid JSON."
-            await _append_event(
-                job,
-                {
-                    "type": "row_complete",
-                    "index": row.index,
-                    "company": row.company,
-                    "domain": row.domain,
-                    "status": "error",
-                    "error": row.error,
-                },
+        hint = stderr_text[-1200:] if stderr_text else "(no stderr)"
+        if not stdout_text:
+            row.error = (
+                "Agent produced no stdout (empty). The subprocess may have crashed "
+                "before printing the brief. Stderr tail:\n"
+                f"{hint}"
             )
-            continue
+        else:
+            try:
+                json.loads(stdout_text)
+                row.error = (
+                    "Agent stdout was JSON but not a prospect brief "
+                    "(expected top-level track + verdict). Stderr tail:\n"
+                    f"{hint}"
+                )
+            except json.JSONDecodeError:
+                row.error = (
+                    "Agent stdout was not valid JSON (brief may be buried in log noise). "
+                    "Stderr tail:\n"
+                    f"{hint}"
+                )
 
-        row.status = "ok"
+        row.status = "error"
         row.exit_code = proc.returncode
-        row.brief = brief
-        row.run_dir = run_dir_m.group(1) if run_dir_m else None
         await _append_event(
             job,
             {
@@ -210,11 +270,9 @@ async def _run_batch(job_id: str) -> None:
                 "index": row.index,
                 "company": row.company,
                 "domain": row.domain,
-                "status": "ok",
+                "status": "error",
                 "exit_code": proc.returncode,
-                "track": brief.get("track") if isinstance(brief, dict) else None,
-                "verdict": brief.get("verdict") if isinstance(brief, dict) else None,
-                "brief": brief if isinstance(brief, dict) else None,
+                "error": row.error,
             },
         )
 
@@ -258,6 +316,8 @@ def create_app() -> FastAPI:
     ) -> dict[str, Any]:
         raw = await file.read()
         if not raw:
+            name = file.filename or "upload"
+            logger.warning("batch upload rejected: empty file (%r)", name)
             raise HTTPException(status_code=400, detail="Empty file.")
         name = file.filename or "upload.csv"
         try:
@@ -268,6 +328,7 @@ def create_app() -> FastAPI:
                 domain_column=domain_column,
             )
         except SpreadsheetParseError as e:
+            logger.warning("batch upload rejected: %s (%r)", e, name)
             raise HTTPException(status_code=400, detail=str(e)) from e
 
         job_id = str(uuid.uuid4())

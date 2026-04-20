@@ -34,20 +34,30 @@ class Settings(BaseSettings):
     # ── Kill switch (§7.5) ────────────────────────────────────────────
     enabled: bool = Field(default=True, alias="ARKENSTONE_AGENT_ENABLED")
 
-    # ── API keys (required) ──────────────────────────────────────────
+    # ── API keys ───────────────────────────────────────────────────────
     anthropic_api_key: SecretStr = Field(..., alias="ANTHROPIC_API_KEY")
-    sam_gov_api_key: SecretStr = Field(..., alias="SAM_GOV_API_KEY")
+    sam_gov_api_key: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        alias="SAM_GOV_API_KEY",
+    )
+    # When true, an empty SAM key is allowed at startup; SAM lookups return
+    # not_found so the model can lean on web_search until a key is issued.
+    sam_gov_optional: bool = Field(default=False, alias="SAM_GOV_OPTIONAL")
 
     # ── Model ────────────────────────────────────────────────────────
     model: str = "claude-opus-4-7"
-    max_tokens: int = 4096
+    # Tool-heavy turns (and adaptive thinking) need headroom; if this is too low
+    # the API returns stop_reason=max_tokens and the run halts.
+    max_tokens: int = 8192
     thinking_adaptive: bool = True
 
     # ── Budgets (hard rails — §1 + §6) ───────────────────────────────
     max_tool_calls: int = 12
     max_cost_usd: float = 0.50
     max_wall_seconds: int = 90
-    max_context_tokens: int = 40_000
+    # Per API request (usage.input_tokens). Web search + tool payloads often land
+    # in the 50–80k range; 40k was halting otherwise-successful runs.
+    max_context_tokens: int = 128_000
     max_iterations: int = 20
 
     # ── Observability ────────────────────────────────────────────────
@@ -73,6 +83,7 @@ class ConfigError(RuntimeError):
 
 
 _SAM_KEY_RE = re.compile(r"^[A-Za-z0-9\-]{20,}$")
+_SAM_KEY_MIN_LEN = 20
 _ANTHROPIC_KEY_RE = re.compile(r"^sk-ant-[A-Za-z0-9_\-]{20,}$")
 
 
@@ -89,11 +100,20 @@ def _validate_startup(settings: Settings) -> None:
             "ANTHROPIC_API_KEY is missing or malformed (expected 'sk-ant-...')."
         )
 
-    sk = settings.sam_gov_api_key.get_secret_value()
-    if not sk or not _SAM_KEY_RE.match(sk):
+    sk = settings.sam_gov_api_key.get_secret_value().strip()
+    if settings.sam_gov_optional:
+        # Optional SAM: empty is fine. Short values (e.g. `...` from .env.example)
+        # are treated as unset so copy-paste setups do not fail startup.
+        if len(sk) >= _SAM_KEY_MIN_LEN and not _SAM_KEY_RE.match(sk):
+            raise ConfigError(
+                "SAM_GOV_API_KEY is set but malformed. Request one at "
+                "https://open.gsa.gov/api/sam-api-key/ ."
+            )
+    elif not sk or not _SAM_KEY_RE.match(sk):
         raise ConfigError(
             "SAM_GOV_API_KEY is missing or malformed. Request one at "
-            "https://open.gsa.gov/api/sam-api-key/ ."
+            "https://open.gsa.gov/api/sam-api-key/ . "
+            "For local runs without SAM yet, set SAM_GOV_OPTIONAL=true in .env."
         )
 
 

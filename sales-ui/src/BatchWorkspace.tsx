@@ -251,7 +251,7 @@ export default function BatchWorkspace() {
       <form className="card card--workspace" onSubmit={onSubmit}>
         <h3 className="h3 card-title">Import</h3>
         <p className="muted" style={{ marginTop: 0 }}>
-          UTF-8 CSV or XLSX · header row required · up to 500 rows
+          UTF-8 CSV or TXT (comma-separated) or XLSX · header row required · up to 500 rows
         </p>
 
         <label
@@ -270,7 +270,7 @@ export default function BatchWorkspace() {
         >
           <input
             type="file"
-            accept=".csv,.xlsx,.xlsm"
+            accept=".csv,.txt,.xlsx,.xlsm"
             onChange={(e) => {
               const f = e.target.files?.[0];
               if (f) setFile(f);
@@ -289,7 +289,7 @@ export default function BatchWorkspace() {
               <>
                 <span className="dropzone-title">Drop a file here</span>
                 <span className="dropzone-sub">or click to browse</span>
-                <span className="dropzone-formats">.csv · .xlsx · .xlsm</span>
+                <span className="dropzone-formats">.csv · .txt · .xlsx · .xlsm</span>
               </>
             )}
           </div>

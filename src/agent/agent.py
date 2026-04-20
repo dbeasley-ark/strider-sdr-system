@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import time
 import uuid
 from collections.abc import Callable
@@ -37,9 +36,8 @@ from typing import Any, Literal
 
 from anthropic import AsyncAnthropic
 from anthropic.types import Message
-from pydantic import ValidationError
-
 from agent.brief import Brief, insufficient_data
+from agent.brief_parse import parse_brief_from_model_text
 from agent.config import settings
 from agent.identity import IdentityCache
 from agent.observability.cost import CostTracker
@@ -65,6 +63,8 @@ AgentStatus = Literal[
     "halted_tool_budget",
     "halted_cost_budget",
     "halted_wall_budget",
+    "halted_context_budget",
+    "halted_max_output_tokens",
     "halted_max_iterations",
     "compliance_hard_stop",
     "insufficient_data",
@@ -99,6 +99,7 @@ HaltReason = Literal[
     "context_budget_exhausted",
     "cost_budget_exhausted",
     "wall_budget_exhausted",
+    "max_output_tokens_exhausted",
     "safety_filter",
     "compliance_hard_stop",
     "internal_error",
@@ -269,15 +270,60 @@ class Agent:
                         usage=cost.summary(),
                     )
 
+                    req_in = getattr(response.usage, "input_tokens", None) or 0
+                    if req_in > settings.max_context_tokens:
+                        trace.event(
+                            "halt.context_budget",
+                            input_tokens=req_in,
+                            max_context_tokens=settings.max_context_tokens,
+                        )
+                        return self._finalize_insufficient(
+                            reason=(
+                                f"context budget exceeded ({req_in} input tokens > "
+                                f"{settings.max_context_tokens}); raise AGENT_MAX_CONTEXT_TOKENS "
+                                "or rely on fewer/lighter web_search and fetch results."
+                            ),
+                            halt_reason="context_budget_exhausted",
+                            status="halted_context_budget",
+                            run_id=run_id,
+                            company=company,
+                            started=started,
+                            cost=cost,
+                            iterations=iterations,
+                            tool_calls=tool_calls_used,
+                            trace=trace,
+                            run_dir=run_dir,
+                        )
+
+                    if response.stop_reason == "max_tokens":
+                        trace.event("halt.max_output_tokens")
+                        return self._finalize_insufficient(
+                            reason=(
+                                f"model output hit max_tokens ({settings.max_tokens}); "
+                                "raise AGENT_MAX_TOKENS or use a leaner tool plan."
+                            ),
+                            halt_reason="max_output_tokens_exhausted",
+                            status="halted_max_output_tokens",
+                            run_id=run_id,
+                            company=company,
+                            started=started,
+                            cost=cost,
+                            iterations=iterations,
+                            tool_calls=tool_calls_used,
+                            trace=trace,
+                            run_dir=run_dir,
+                        )
+
                     messages.append({"role": "assistant", "content": response.content})
 
                     if response.stop_reason == "end_turn":
                         text = _extract_text(response)
-                        brief, parse_error = _parse_brief(
+                        brief, parse_error = parse_brief_from_model_text(
                             text,
                             run_id=run_id,
                             company=company,
                             generated_at=datetime.now(UTC),
+                            max_tool_calls=settings.max_tool_calls,
                         )
                         if brief is None:
                             trace.event(
@@ -740,46 +786,6 @@ def _as_tool_result(tool_id: str, payload: Any, *, is_error: bool) -> dict[str, 
 def _extract_text(response: Message) -> str:
     parts = [b.text for b in response.content if getattr(b, "type", None) == "text"]
     return "\n".join(parts).strip()
-
-
-_JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
-
-
-def _parse_brief(
-    text: str,
-    *,
-    run_id: str,
-    company: str,
-    generated_at: datetime,
-) -> tuple[Brief | None, str | None]:
-    if not text.strip():
-        return None, "empty model response"
-
-    match = _JSON_OBJECT_RE.search(text)
-    if not match:
-        return None, "no JSON object in response"
-
-    try:
-        raw = json.loads(match.group(0))
-    except json.JSONDecodeError as e:
-        return None, f"JSON decode error: {e}"
-
-    raw.setdefault("run_id", run_id)
-    raw.setdefault("generated_at", generated_at.isoformat())
-    raw.setdefault("confidentiality", "internal_only")
-    raw.setdefault("company_name_queried", company)
-    raw.setdefault("tool_calls_used", 0)
-    raw.setdefault("tool_calls_budget", settings.max_tool_calls)
-    raw.setdefault("wall_seconds", 0.0)
-    raw.setdefault("cost_usd", 0.0)
-    raw.setdefault("hooks", [])
-    raw.setdefault("target_roles", [])
-    raw.setdefault("sources_used", [])
-
-    try:
-        return Brief.model_validate(raw), None
-    except ValidationError as e:
-        return None, f"schema validation failed: {e}"
 
 
 def _write_brief(run_dir: Path, brief: Brief) -> None:
