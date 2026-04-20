@@ -78,7 +78,7 @@ class BatchJob:
     def __post_init__(self) -> None:
         if not self.rows:
             self.rows = [
-                RowResult(i=i, company=c, domain=d, status="pending")
+                RowResult(index=i, company=c, domain=d, status="pending")
                 for i, (c, d) in enumerate(self.parsed.rows)
             ]
 

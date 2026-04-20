@@ -1,120 +1,177 @@
-# Agent Template
+# Prospect Research
 
-An opinionated starter for building Claude-powered agents that don't fall over in production.
+**Arkenstone Defense** — Claude-powered agent that qualifies inbound defense-tech companies against **Track 1** and **Track 2** ICP criteria and produces a structured **brief** an SDR can scan in about a minute (classification, hooks with citations, target roles, confidence).
 
-> **Before you write any code, fill out [`AGENT_SPEC.md`](./AGENT_SPEC.md).**
-> If you can't fill it out in 15 minutes, you don't understand the problem yet. That's not a ceremony — it's the highest-leverage 15 minutes you'll spend on this project.
-
----
-
-## Philosophy
-
-This template encodes seven disciplines from agent engineering:
-
-1. **System Design** — data flow, failure handling, context boundaries (see `AGENT_SPEC.md` §3)
-2. **Tool / Contract Design** — Pydantic schemas, no vague strings (`src/agent/tools/_base.py`)
-3. **Retrieval Engineering** — chunking, embeddings, re-ranking (`src/agent/modules/rag/`)
-4. **Reliability Engineering** — retry, timeout, circuit breaker (`src/agent/reliability/`)
-5. **Security Engineering** — input validation, permission scopes (`src/agent/security/`)
-6. **Evaluation & Observability** — golden sets, tracing, cost (`evals/`, `src/agent/observability/`)
-7. **Product Thinking** — confidence signaling, human-in-the-loop (`src/agent/modules/human_in_loop/`)
-
-The core loop uses the **Anthropic Client SDK** (not the Agent SDK) because we want explicit control over every tool call so we can wrap it with our reliability and observability machinery.
+The authoritative product and safety spec is [`AGENT_SPEC.md`](./AGENT_SPEC.md). This README is the operational entry point: install, run, batch UI, evals, and layout.
 
 ---
 
-## Profiles
+## What you get
 
-Pick one when you scaffold a new agent. You can upgrade later.
+- **CLI:** `python -m agent --company "<name-or-domain>"` — runs the research loop, prints JSON to stdout, streams progress to stderr, writes `trace.jsonl` and `brief.json` under `./runs/<slug>/<timestamp>/`.
+- **Tooling:** Pydantic tool contracts, retries/timeouts/circuit breaker, structured tracing, cost and wall-clock budgets, URL allowlisting, compliance-oriented output filtering (see `src/agent/`).
+- **Batch sales UI (optional):** FastAPI service + React (Vite) app — upload a spreadsheet, map company/domain columns, run one subprocess per row against the same CLI.
+- **Evals:** Golden and adversarial JSON suites with threshold gates (`evals/run.py`).
 
-| Profile | Use for | What you get |
-|---|---|---|
-| `lean` | Throwaway scripts, personal automations | Core loop + Pydantic tool contracts + basic tracing. No evals folder, no optional modules. Ships in an afternoon. |
-| `standard` | Internal work automations, client work | Everything in lean + `evals/` + reliability stack + AGENT_SPEC enforced. **Default.** |
-| `production` | Customer-facing SaaS | Everything in standard + security module + human-in-the-loop + CI eval gates + external tracing hooks. |
+Non-goals and trust model (who may call this, what data is allowed) are spelled out in the spec — read **§1–§3** before changing behavior or deploying.
 
 ---
 
-## Quickstart
+## Requirements
+
+- **Python** 3.11+
+- **[uv](https://docs.astral.sh/uv/)** (recommended) or pip with a virtualenv
+- **Node.js** 18+ — only if you use the `sales-ui` dev server or build static assets
+
+---
+
+## Install
+
+From the repository root:
 
 ```bash
-# 1. Clone and enter
-git clone <this-repo> my-agent && cd my-agent
+uv sync --extra dev --extra ui
+```
 
-# 2. Install
-uv sync  # or: pip install -e ".[dev]"
+Minimal install (CLI + tests, no FastAPI batch server):
 
-# 3. Fill out the spec. DO NOT SKIP.
-$EDITOR AGENT_SPEC.md
+```bash
+uv sync --extra dev
+```
 
-# 4. Set your API key
+Optional dependency groups in `pyproject.toml`: `ui` (batch API + spreadsheets), `rag`, `mcp` — add with e.g. `uv sync --extra dev --extra ui --extra rag`.
+
+---
+
+## Configuration
+
+```bash
 cp .env.example .env
-# edit .env with your ANTHROPIC_API_KEY
+```
 
-# 5. Scaffold a new agent from your spec (optional convenience)
-python scripts/new_agent.py --name my-agent --profile standard
+Required variables (see `.env.example` for the full list and comments):
 
-# 6. Run the example agent
-python -m agent
+| Variable | Purpose |
+|----------|---------|
+| `ANTHROPIC_API_KEY` | Claude API |
+| `SAM_GOV_API_KEY` | SAM.gov entity lookup ([GSA open data](https://open.gsa.gov/api/sam-api-key/)) |
+| `ARKENSTONE_AGENT_ENABLED` | Kill switch — must be `true` to run |
 
-# 7. Run evals
-python evals/run.py
+Model, budgets (tool calls, USD cost, wall seconds, context), runs directory, and profile are also configured via `AGENT_*` env vars.
+
+**Importing config without keys** (e.g. lightweight helpers): set `_AGENT_SKIP_STARTUP_CHECKS=1` — used internally so tooling does not require secrets at import time.
+
+---
+
+## CLI usage
+
+```bash
+uv run python -m agent --company "Shield AI"
+uv run python -m agent --company shield.ai --domain shield.ai
+uv run python -m agent --company "Hadrian" --quiet
+```
+
+- **Stdout:** final brief as JSON (default; `--json` is explicit alias).
+- **Stderr:** progress and a short result summary unless `--quiet`.
+- **Exit codes:** `0` success, `1` insufficient data / budget halt, `2` error or compliance hard stop.
+
+Artifacts: `./runs/<company-slug>/<timestamp>/` — `brief.json`, `trace.jsonl`.
+
+---
+
+## Sales batch UI
+
+Two processes in development: API on **8765**, Vite on **5173** with `/api` proxied to the API.
+
+**Terminal 1 — API** (requires `uv sync --extra ui`):
+
+```bash
+uv run prospect-sales-ui
+```
+
+Optional: `AGENT_SALES_UI_HOST`, `AGENT_SALES_UI_PORT` (default `127.0.0.1:8765`), `AGENT_SALES_UI_RELOAD=true` for uvicorn reload.
+
+**Terminal 2 — React dev server:**
+
+```bash
+cd sales-ui && npm install && npm run dev
+```
+
+Open `http://localhost:5173`, upload a CSV/XLSX with company (and optionally domain) columns, start a batch job, and stream events.
+
+**Production-style:** build the UI and serve it from the same process:
+
+```bash
+cd sales-ui && npm run build
+uv run prospect-sales-ui
+```
+
+If `sales-ui/dist` exists, the FastAPI app mounts it at `/`; API routes remain under `/api/...`.
+
+---
+
+## Tests
+
+```bash
+uv run pytest
 ```
 
 ---
 
-## Directory Layout
+## Evals
+
+Evals invoke the **real** agent (network + API usage). Ensure `.env` is configured, then:
+
+```bash
+uv run python evals/run.py
+uv run python evals/run.py --golden
+uv run python evals/run.py --adversarial
+```
+
+Thresholds and policies are documented in `evals/run.py` and **AGENT_SPEC §8**.
+
+---
+
+## Repository layout
 
 ```
-agent-template/
-├── AGENT_SPEC.md              ← FILL OUT FIRST
+├── AGENT_SPEC.md           Product, ICP, data flow, security, eval policy
+├── pyproject.toml          Package: prospect-research; extras: dev, ui, rag, mcp
+├── .env.example
 ├── src/agent/
-│   ├── config.py              Model, effort, budgets
-│   ├── agent.py               Main loop — thin orchestration
-│   ├── tools/                 Tool contracts (Pydantic-enforced)
-│   ├── prompts/               Versioned system prompts
-│   ├── reliability/           Retry, timeout, circuit breaker
-│   ├── observability/         Tracing, cost tracking
-│   ├── security/              Input validation, permissions
-│   └── modules/               OPTIONAL — delete what you don't use
-│       ├── rag/               Retrieval (chunking, embed, rerank)
-│       ├── memory/            Long-running session state
-│       ├── multi_agent/       Subagents + verifier pattern
-│       ├── mcp/               Model Context Protocol client
-│       └── human_in_loop/     Escalation, confidence gating
-├── evals/                     Golden + adversarial test sets
-├── scripts/new_agent.py       Scaffolder
-└── tests/                     Unit tests (tool contracts, reliability)
+│   ├── __main__.py         CLI entry
+│   ├── agent.py            Orchestration loop
+│   ├── brief.py            Brief schema
+│   ├── config.py           Settings and startup validation
+│   ├── identity.py         Company identity resolution
+│   ├── sales_app.py        FastAPI batch UI + static mount
+│   ├── spreadsheet_import.py
+│   ├── prompts/
+│   ├── tools/              fetch_company_page, SAM, USASpending, SBIR, registry
+│   ├── reliability/
+│   ├── observability/
+│   └── security/
+├── evals/
+│   ├── run.py
+│   ├── golden/
+│   └── adversarial/
+├── tests/
+├── sales-ui/               Vite + React (batch workspace, brief cards)
+├── docs/                   Agent engineering notes; design system draft
+└── assets/logos/
 ```
 
----
-
-## The Non-Negotiables
-
-These ship on by default. You can turn them off, but you'll have to work at it — which is the point.
-
-- Every tool call goes through `reliability.with_retry()` + timeout + circuit breaker.
-- Every tool's inputs and outputs are validated against a Pydantic schema.
-- Every agent run emits a structured trace (JSONL, one line per decision).
-- Every run tracks token + dollar cost against a budget from `config.py`.
-- Eval runner refuses to pass if success rate drops below your threshold.
+Console script: **`prospect-sales-ui`** → `agent.sales_app:main`.
 
 ---
 
-## What This Template Does NOT Do
+## Further reading
 
-- **It does not pick your problem for you.** The spec document does.
-- **It does not replace evals with "vibes."** If you skip `evals/run.py`, that's on you.
-- **It does not prevent prompt injection by magic.** The validators are a starting point; your threat model is yours.
-- **It does not run long-lived sessions, multi-agent swarms, or MCP servers out of the box.** Those are optional modules — deliberately stubs — because they're overkill for most agents.
+- [`docs/README.md`](./docs/README.md) — short index of system design, tools, reliability, security, evals, and product-thinking notes
+- [`docs/ARKENSTONE_DESIGN_SYSTEM.md`](./docs/ARKENSTONE_DESIGN_SYSTEM.md) — UI tokens and patterns (sales UI)
 
 ---
 
-## Next Steps After Cloning
+## License / usage
 
-1. Read `AGENT_SPEC.md` end-to-end. Fill it in. Have a second human review it.
-2. Replace `src/agent/tools/example_tool.py` with your actual tools.
-3. Write 10 golden cases in `evals/golden/` before you ship anything.
-4. Delete the modules in `src/agent/modules/` that you don't need. Don't carry dead code.
-
-See [`docs/`](./docs) for deeper notes on each discipline.
+Internal Arkenstone Defense project context is assumed in `AGENT_SPEC.md`. Add a `LICENSE` file at the repo root if you intend open distribution.
