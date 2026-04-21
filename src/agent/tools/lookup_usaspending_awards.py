@@ -8,6 +8,7 @@ No sub-awards in v1 (§4.3 scope decision). Logged as §10 gap.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import date, datetime
 from typing import Any, ClassVar, Literal
@@ -101,7 +102,9 @@ class LookupUSAspendingAwards(
         "Track 1 candidate with zero federal primes is probably not "
         "Track 1. UEI match is preferred; name-only is conservative "
         "(fuzzy threshold 92) to avoid confusing similarly-named "
-        "companies. Does NOT query sub-awards in v1."
+        "companies. Does NOT query sub-awards in v1. The tool fans out "
+        "one request per award-type group (contracts vs. IDVs) "
+        "automatically; you can leave `award_types` at its default."
     )
     Input = LookupUSAspendingAwardsInput
     Output = LookupUSAspendingAwardsOutput
@@ -124,44 +127,29 @@ class LookupUSAspendingAwards(
         end = date.today()
         start = date(end.year - inputs.lookback_years, end.month, min(end.day, 28))
 
-        type_codes: list[str] = []
-        for t in inputs.award_types:
-            type_codes.extend(_AWARD_CODES[t])
+        # USAspending rejects award_type_codes that mix groups
+        # (422 "must only contain types from one group"). Fan out one POST
+        # per requested group and merge; dedupe by Award ID on the result.
+        requested_groups = list(dict.fromkeys(inputs.award_types))  # preserve order, unique
+        if not requested_groups:
+            requested_groups = ["contract", "idv"]
 
-        filters: dict[str, Any] = {
-            "time_period": [{"start_date": start.isoformat(), "end_date": end.isoformat()}],
-            "award_type_codes": type_codes,
-        }
-        # Identity filter: prefer UEI when present; otherwise fall back to name.
-        if inputs.uei:
-            filters["recipient_id"] = inputs.uei  # USAspending accepts UEI here
-        else:
-            filters["recipient_search_text"] = [inputs.recipient_name]
-
-        body = {
-            "filters": filters,
-            "fields": [
-                "Award ID",
-                "Recipient Name",
-                "Awarding Agency",
-                "Awarding Sub Agency",
-                "Award Amount",
-                "Start Date",
-                "End Date",
-                "Description",
-                "NAICS",
-                "generated_internal_id",
-                "award_type",
-            ],
-            "page": 1,
-            "limit": inputs.max_results,
-            "sort": "Award Amount",
-            "order": "desc",
-        }
+        bodies = [
+            _build_body(
+                group=g,
+                start=start,
+                end=end,
+                inputs=inputs,
+            )
+            for g in requested_groups
+        ]
 
         try:
-            data = await _usaspending_post(body)
-        except TransientError as e:
+            results_per_group = await asyncio.gather(
+                *(_usaspending_post(b) for b in bodies),
+                return_exceptions=True,
+            )
+        except Exception as e:  # noqa: BLE001 — network glue, surface cleanly
             return LookupUSAspendingAwardsOutput(
                 recipient_name_query=inputs.recipient_name,
                 identity_resolution=_resolution(inputs),
@@ -172,9 +160,49 @@ class LookupUSAspendingAwards(
                 error=f"transient: {e}",
             )
 
-        results = data.get("results", []) or []
-        awards = [_parse_award(r) for r in results]
-        awards = [a for a in awards if a is not None]
+        merged_rows: list[dict[str, Any]] = []
+        total_rows_reported = 0
+        errors: list[str] = []
+        for group, outcome in zip(requested_groups, results_per_group, strict=True):
+            if isinstance(outcome, TransientError):
+                errors.append(f"{group}: transient: {outcome}")
+                continue
+            if isinstance(outcome, Exception):
+                errors.append(f"{group}: {type(outcome).__name__}: {outcome}")
+                continue
+            data = outcome
+            merged_rows.extend(data.get("results", []) or [])
+            total_rows_reported += int(
+                (data.get("page_metadata") or {}).get("total") or 0
+            )
+
+        if not merged_rows and errors:
+            # All groups failed — surface the combined error so the agent can
+            # reason about whether to retry, rather than claiming "no awards".
+            return LookupUSAspendingAwardsOutput(
+                recipient_name_query=inputs.recipient_name,
+                identity_resolution=_resolution(inputs),
+                awards=[],
+                total_awards_found=0,
+                total_amount_usd=0.0,
+                fetched_at=now,
+                error="; ".join(errors),
+            )
+
+        seen_ids: set[str] = set()
+        awards: list[FederalAward] = []
+        for r in merged_rows:
+            parsed = _parse_award(r)
+            if parsed is None:
+                continue
+            if parsed.award_id and parsed.award_id in seen_ids:
+                continue
+            if parsed.award_id:
+                seen_ids.add(parsed.award_id)
+            awards.append(parsed)
+
+        awards.sort(key=lambda a: a.amount_usd, reverse=True)
+        awards = awards[: inputs.max_results]
 
         total = sum(a.amount_usd for a in awards)
 
@@ -182,11 +210,52 @@ class LookupUSAspendingAwards(
             recipient_name_query=inputs.recipient_name,
             identity_resolution=_resolution(inputs),
             awards=awards,
-            total_awards_found=data.get("page_metadata", {}).get("total", len(awards)),
+            total_awards_found=total_rows_reported or len(awards),
             total_amount_usd=total,
             data_as_of=now.date(),
             fetched_at=now,
+            error="; ".join(errors) if errors else None,
         )
+
+
+def _build_body(
+    *,
+    group: Literal["contract", "idv"],
+    start: date,
+    end: date,
+    inputs: LookupUSAspendingAwardsInput,
+) -> dict[str, Any]:
+    filters: dict[str, Any] = {
+        "time_period": [
+            {"start_date": start.isoformat(), "end_date": end.isoformat()}
+        ],
+        "award_type_codes": list(_AWARD_CODES[group]),
+    }
+    if inputs.uei:
+        filters["recipient_id"] = inputs.uei
+    else:
+        filters["recipient_search_text"] = [inputs.recipient_name]
+
+    return {
+        "filters": filters,
+        "fields": [
+            "Award ID",
+            "Recipient Name",
+            "Awarding Agency",
+            "Awarding Sub Agency",
+            "Award Amount",
+            "Start Date",
+            "End Date",
+            "Description",
+            "NAICS",
+            "generated_internal_id",
+            "award_type",
+        ],
+        "page": 1,
+        "limit": inputs.max_results,
+        "sort": "Award Amount",
+        "order": "desc",
+    }
 
 
 def _resolution(

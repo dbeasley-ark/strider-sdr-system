@@ -533,7 +533,8 @@ Per-tool failure modes are in §4.1–§4.5. This section lists cross-cutting fa
 | LLM returns invalid tool args | Pydantic validation on tool input | Return validation error to LLM next turn; retry up to 3x; escalate to caller if still failing |
 | Tool returns unexpected data | Pydantic validation on tool output | Log schema-drift incident; return error record to LLM; LLM decides to retry or fall back |
 | Tool times out | Per-tool reliability wrapper | Retry with exp backoff (per-tool rules in §4); circuit-break after K failures |
-| Agent loops without progress | Global tool-call counter (budget = 12) | Halt; return partial brief with `verdict=insufficient_data` + `halt_reason=tool_budget_exhausted` |
+| Agent loops without progress | Global tool-call counter (budget = 12) | Halt; return `verdict=insufficient_data` + `halt_reason=tool_budget_exhausted` (or tool-clamp path asks model to emit JSON first) |
+| Wall-clock budget exceeded | Orchestration timer (checked between LLM rounds) | Optional **post-wall synthesis**: one tools-off LLM turn turns the transcript into a schema-valid brief, usually `low_confidence`, with `why_not_confident` citing the time cap. If synthesis is disabled or fails, return `insufficient_data` + `halt_reason=wall_budget_exhausted`. |
 | Context exceeds 40k tokens | Token accounting in orchestration | Halt; return `verdict=insufficient_data` + `halt_reason=context_budget_exhausted` |
 | Prompt injection detected in fetched content | `injection_signals` populated by `fetch_company_page` | Content delimited but included (§7.1); output validator verifies no injected claims survived into brief |
 | Classified / CUI marker detected | Output filter (§7.3) | **HARD STOP.** Abort run; write `SECURITY_INCIDENT` line to trace; no brief returned; exit nonzero |
@@ -550,7 +551,7 @@ Per-tool failure modes are in §4.1–§4.5. This section lists cross-cutting fa
 - **Max wall-clock per run (seconds):** 90 (matches §1 acceptance criterion)
 - **Max context tokens per turn:** 40,000 (headroom under the 50k threshold)
 
-On any budget violation the agent returns a structured `insufficient_data` brief with a machine-readable `halt_reason` field — never a silent timeout.
+On tool/cost/context/output-token budget violations the agent returns a structured `insufficient_data` brief with a machine-readable `halt_reason` when it cannot salvage a model brief. **Wall budget** may instead trigger a bounded synthesis-only continuation that returns a normal brief (typically `low_confidence`) while the trace records the wall event — see env `AGENT_WALL_SYNTHESIS_*`. Never a silent timeout.
 
 ---
 
@@ -786,9 +787,10 @@ V1 is CLI — the caller IS the human-in-the-loop. No formal escalation surface 
 
 A "bad day" from the caller's perspective looks like:
 
-- A brief arrives within 90s, structured JSON, with `verdict=insufficient_data` and a clear `why_not_confident` string
+- A brief arrives within the wall budget (or shortly after, if one synthesis round is allowed), structured JSON, with `verdict=insufficient_data` and a clear `why_not_confident` string when the run truly could not classify
+- OR a **partial** brief with `verdict=low_confidence` after wall budget, where `why_not_confident` explains missing checks — the SDR continues research manually
 - OR a clear stderr message explaining what's broken (missing key, kill-switch on, egress blocked)
-- NEVER a stack trace, NEVER a silent partial result, NEVER a confident fabrication
+- NEVER a stack trace, NEVER a silent empty result without `brief.json`, NEVER a confident fabrication
 
 Any unhandled exception surfaces as `verdict=insufficient_data` + `why_not_confident=internal_error`, with the trace preserved to disk for debugging.
 

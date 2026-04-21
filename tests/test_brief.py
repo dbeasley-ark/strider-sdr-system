@@ -32,7 +32,7 @@ def _minimal_brief(**overrides):
         target_roles=[],
         hooks=[],
         tool_calls_used=5,
-        tool_calls_budget=12,
+        tool_calls_budget=13,
         wall_seconds=60.0,
         cost_usd=0.35,
     )

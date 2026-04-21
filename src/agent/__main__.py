@@ -70,6 +70,16 @@ async def _main(argv: list[str]) -> int:
         help="Optional explicit domain hint. Improves URL allowlist seeding.",
     )
     parser.add_argument(
+        "--poc-name",
+        default=None,
+        help="Optional rep-provided point of contact (unverified context for the prompt).",
+    )
+    parser.add_argument(
+        "--poc-title",
+        default=None,
+        help="Optional rep-provided role or position (unverified context for the prompt).",
+    )
+    parser.add_argument(
         "--run-dir",
         default=None,
         help=(
@@ -99,6 +109,8 @@ async def _main(argv: list[str]) -> int:
     result = await agent.research(
         args.company,
         domain=args.domain,
+        poc_name=args.poc_name,
+        poc_title=args.poc_title,
         run_dir=run_dir,
         progress=progress,
     )
@@ -122,7 +134,7 @@ async def _main(argv: list[str]) -> int:
             stderr.print(f"[red]error:[/red] {result.error}")
 
     # Exit codes: 0 ok, 1 insufficient/budget halts, 2 hard error/compliance stop.
-    if result.status == "ok":
+    if result.status in ("ok", "halted_wall_budget_synthesized"):
         return 0
     if result.status in ("error", "compliance_hard_stop"):
         return 2

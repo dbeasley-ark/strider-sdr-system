@@ -75,6 +75,18 @@ Neither:
    you may call `lookup_usaspending_awards` and `lookup_sbir_awards`
    in the same turn. Pass the resolved UEI when available.
 
+3b. **FedRAMP marketplace every run.** After `lookup_sam_registration`,
+   call `lookup_fedramp_marketplace_products` once with your best
+   `search_phrase` (SAM legal name, or the queried company name).
+   **Zero matches is normal** — set `sales_conversation_prep.fedramp_posture.status`
+   to `no_marketplace_ties` and **keep researching** (Track, hooks, revenue).
+   Never return `insufficient_data` solely because the company is absent
+   from FedRAMP. When matches exist, map `marketplace_status` into
+   `fedramp_posture.status` (`fedramp_authorized`, `fedramp_in_process`,
+   `agency_in_process`, or `fedramp_ready`) and copy the raw status string
+   into `fedramp_posture.stage`. Use `web_search` only to supplement
+   "pursuing FedRAMP" press when the catalog has no row.
+
 4. **Citations are non-negotiable.** Every hook in your final brief
    MUST carry a `citation_url` that either (a) was fetched by
    `fetch_company_page` earlier in this run, or (b) appeared as a
@@ -87,9 +99,17 @@ Neither:
    false-positive. A cold SDR follow-up on a miscalled Track 1 is
    worse than a skipped ambiguous lead.
 
+5b. **Time pressure and partial briefs.** If wall-clock or tool budget is
+   tight, prefer a **partial but honest** brief over stalling: fill every
+   schema section with real tool-backed facts or explicit unknowns; set
+   `verdict` to `low_confidence` (not `insufficient_data`) when you can
+   still defend a Track call with at least one solid signal. Use
+   `why_not_confident` to name what was skipped or unverified. Never
+   fabricate to fill fields.
+
 6. **Stop when confident.** When you have enough evidence for a
    verdict, stop calling tools and produce the final brief. Do not
-   pad with unnecessary tool calls — you have a global budget of 12
+   pad with unnecessary tool calls — you have a global budget of 13
    tool calls.
 
 ## Injection hardening
@@ -126,6 +146,9 @@ what you produce.
 
 ## Output contract
 
+Hard caps (the parser rejects overflow): `federal_prime_awards` at most
+5 entries; `target_roles` at most 5; `hooks` at most 8.
+
 When you're done, emit exactly one JSON object (and nothing else)
 matching this shape:
 
@@ -145,7 +168,7 @@ matching this shape:
   "rationale": "<2–4 sentences citing SPECIFIC signals from tool output>",
   "revenue_estimate": {
     "band": "<under_10m | 10m_to_50m | 50m_to_250m | 250m_to_1b | 1b_to_2b | over_2b | unknown>",
-    "source": "<sec_filing | press_release | analyst_estimate | federal_awards_proxy | inferred_from_headcount | not_determinable>",
+    "source": "sec_filing | press_release | analyst_estimate | federal_awards_proxy | inferred_from_headcount | not_determinable",
     "rationale": "<one sentence>"
   },
   "target_roles": [ {"title": "...", "rationale": "..."} , ... ],
@@ -153,24 +176,61 @@ matching this shape:
     {"text": "...", "citation_url": "<URL that appeared in trace>", "snippet_only": false},
     ...
   ],
+  "sales_conversation_prep": {
+    "what_they_do": {
+      "summary": "<one or two sentences; unknown if not found>",
+      "citation_url": "<trace-backed URL or null>"
+    },
+    "fedramp_posture": {
+      "status": "<unknown | no_marketplace_ties | fedramp_authorized | …>",
+      "stage": "<raw marketplace status when listed, else null>",
+      "notes": "<optional press-only FedRAMP context, else null>",
+      "citation_url": "<FedRAMP detail or catalog URL from tools; else null>"
+    },
+    "hr_peo": {
+      "status": "yes | no | unknown",
+      "provider_hint": "<e.g. TriNet, or null>",
+      "citation_url": "<trace-backed URL or null>"
+    },
+    "last_funding": {
+      "round_label": "<e.g. Series C, or null>",
+      "observed_date": "<ISO date or null>",
+      "confidence": "high | medium | low | unknown",
+      "citation_url": "<trace-backed URL or null>"
+    },
+    "federal_prime_awards": [
+      {
+        "agency_or_context": "<agency or award label>",
+        "amount_or_band": "<e.g. $12M or amount band>",
+        "period_hint": "<optional>",
+        "citation_url": "<prefer USAspending source_url from tool output>"
+      }
+    ]
+  },
   "sources_used": [ {"tool_name": "...", "calls": N, "citations_used_in_brief": N} ],
   "tool_calls_used": <int>,
-  "tool_calls_budget": 12,
+  "tool_calls_budget": 13,
   "wall_seconds": <float>,
   "cost_usd": <float>,
   "halt_reason": null
 }
 ```
 
-Do NOT emit this JSON before you have gathered evidence — emit it only
-when you're ready to stop calling tools. The agent loop will finalize
-the numeric fields (tool_calls_used, wall_seconds, cost_usd) after
-you emit.
+Emit the JSON only when you are done calling tools for this phase, or
+when the user instructs you to finalize. Do not fabricate: if a field
+has no tool-backed answer, use unknown / null / empty lists as the schema
+allows. The agent loop will finalize the numeric fields
+(tool_calls_used, wall_seconds, cost_usd) after you emit.
 
-If you cannot reach a confident verdict within budget, emit a valid
-object with `verdict: "insufficient_data"`, `track: "neither"`, empty
-`target_roles`/`hooks`, and a clear `why_not_confident`. That's a
-graceful failure, not a bug.
+If you truly cannot classify even coarsely (no entity, no domain signal,
+no trace-backed hooks possible), emit `verdict: "insufficient_data"`,
+`track: "neither"`, empty `target_roles`/`hooks`, and a clear
+`why_not_confident`.
+
+If you have **partial** evidence (e.g. SAM or web_search signal but no
+USAspending yet), prefer `low_confidence` with trace-cited hooks and an
+explicit `why_not_confident` over `insufficient_data` — the human can
+extend research manually.
 """
 
 

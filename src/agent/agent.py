@@ -15,8 +15,9 @@ Flow:
 
     1. Caller provides company + run_dir + allowlist seed.
     2. Loop:
-       a. Check rails: tool_calls, cost, wall, iterations.
-       b. Call Claude with tools.
+       a. Check rails: tool_calls, cost, wall, iterations (wall may trigger
+          one tools-off synthesis round before stub insufficient_data).
+       b. Call Claude with tools (or without, in the final buffer / synthesis).
        c. On end_turn → parse JSON brief → validate → filter → write.
        d. On tool_use → dispatch each (respecting budgets) → loop.
     3. Final artifact: ./runs/<slug>/<ts>/brief.json + trace.jsonl.
@@ -36,6 +37,7 @@ from typing import Any, Literal
 
 from anthropic import AsyncAnthropic
 from anthropic.types import Message
+
 from agent.brief import Brief, insufficient_data
 from agent.brief_parse import parse_brief_from_model_text
 from agent.config import settings
@@ -52,6 +54,7 @@ from agent.reliability import (
 )
 from agent.security import (
     ComplianceHardStop,
+    Severity,
     UrlAllowlist,
     UrlNotAllowed,
     apply_filter,
@@ -63,6 +66,7 @@ AgentStatus = Literal[
     "halted_tool_budget",
     "halted_cost_budget",
     "halted_wall_budget",
+    "halted_wall_budget_synthesized",
     "halted_context_budget",
     "halted_max_output_tokens",
     "halted_max_iterations",
@@ -90,7 +94,12 @@ class AgentResult:
 WEB_SEARCH_TOOL: dict[str, Any] = {
     "type": "web_search_20260209",
     "name": "web_search",
-    "max_uses": 6,  # §4.2 per-run query budget
+    # §4.2 per-run query budget. Lowered from 6 to 4 — web_search results
+    # are the single biggest source of context bloat (see tanium iter4
+    # jumping from 36k→164k input tokens on one round of searches). The
+    # high_confidence horizon3 run succeeded with just 2 web_search calls,
+    # so 4 leaves comfortable headroom.
+    "max_uses": 4,
 }
 
 
@@ -133,6 +142,8 @@ class Agent:
         company: str,
         *,
         domain: str | None = None,
+        poc_name: str | None = None,
+        poc_title: str | None = None,
         run_dir: Path | None = None,
         progress: Callable[[str], None] | None = None,
     ) -> AgentResult:
@@ -165,20 +176,24 @@ class Agent:
         emit: Callable[[str], None] = progress or (lambda _msg: None)
 
         with Trace(run_dir=run_dir, run_id=run_id) as trace:
-            trace.event(
-                "agent.start",
-                company=company,
-                domain=domain,
-                model=self.model,
-                profile=settings.profile.value,
-                tools=list(self.registry._tools.keys()) + ["web_search"],
-                budgets={
+            start_payload: dict[str, Any] = {
+                "company": company,
+                "domain": domain,
+                "model": self.model,
+                "profile": settings.profile.value,
+                "tools": list(self.registry._tools.keys()) + ["web_search"],
+                "budgets": {
                     "max_tool_calls": settings.max_tool_calls,
                     "max_cost_usd": settings.max_cost_usd,
                     "max_wall_seconds": settings.max_wall_seconds,
                     "max_iterations": settings.max_iterations,
                 },
-            )
+            }
+            if poc_name:
+                start_payload["poc_name"] = poc_name
+            if poc_title:
+                start_payload["poc_title"] = poc_title
+            trace.event("agent.start", **start_payload)
             emit(f"Starting prospect-research for {company!r}")
 
             messages: list[dict[str, Any]] = [
@@ -187,6 +202,8 @@ class Agent:
                     "content": _initial_user_message(
                         company=company,
                         domain=domain,
+                        poc_name=poc_name,
+                        poc_title=poc_title,
                         run_id=run_id,
                         started_at=started_at,
                     ),
@@ -194,6 +211,21 @@ class Agent:
             ]
             iterations = 0
             tool_calls_used = 0
+            # At most one "fix your citations" round trip before we accept
+            # the downgraded brief. Does not count toward tool budget.
+            repair_attempts = 0
+            # Anthropic's server tools (web_search + implicit code execution)
+            # return a `container` referencing a short-lived sandbox. Follow-up
+            # requests that still declare tools must thread the same
+            # `container_id` when the transcript has pending server-tool state;
+            # omitting it can 400. Conversely, requests with **no** tools must
+            # not send `container` — the API rejects it unless the code
+            # execution tool is enabled on that same request (e.g. post-wall
+            # synthesis with allow_tools=False).
+            container_id: str | None = None
+            wall_synthesis_attempted = False
+            reserve_nudge_sent = False
+            brief_parse_repair_attempts = 0
 
             try:
                 while True:
@@ -203,12 +235,235 @@ class Agent:
                     wall = time.monotonic() - started
 
                     if wall > settings.max_wall_seconds:
-                        trace.event("halt.wall_budget", wall_s=wall)
+                        wall_reason = (
+                            f"wall budget exceeded "
+                            f"({wall:.1f}s > {settings.max_wall_seconds}s)"
+                        )
+                        if settings.wall_synthesis_enabled and not wall_synthesis_attempted:
+                            wall_synthesis_attempted = True
+                            trace.event(
+                                "halt.wall_budget",
+                                wall_s=wall,
+                                phase="synthesis_attempt",
+                            )
+                            messages.append(
+                                {
+                                    "role": "user",
+                                    "content": _wall_synthesis_user_message(
+                                        company=company,
+                                        wall_reason=wall_reason,
+                                    ),
+                                }
+                            )
+                            trace.event(
+                                "llm.request",
+                                iteration=iterations,
+                                msg_count=len(messages),
+                                phase="wall_synthesis",
+                            )
+                            try:
+                                synth = await self._call_llm(
+                                    messages,
+                                    allow_tools=False,
+                                    container_id=container_id,
+                                    max_tokens=settings.wall_synthesis_max_tokens,
+                                )
+                            except Exception as e:  # noqa: BLE001
+                                trace.event(
+                                    "wall_synthesis.api_error",
+                                    error=str(e),
+                                    error_type=type(e).__name__,
+                                )
+                                return self._finalize_insufficient(
+                                    reason=(
+                                        f"{wall_reason}; post-wall synthesis failed "
+                                        f"({type(e).__name__}: {e})"
+                                    ),
+                                    halt_reason="wall_budget_exhausted",
+                                    status="halted_wall_budget",
+                                    run_id=run_id,
+                                    company=company,
+                                    started=started,
+                                    cost=cost,
+                                    iterations=iterations,
+                                    tool_calls=tool_calls_used,
+                                    trace=trace,
+                                    run_dir=run_dir,
+                                )
+                            new_container = getattr(synth, "container", None)
+                            new_container_id = getattr(new_container, "id", None)
+                            if new_container_id:
+                                container_id = new_container_id
+                            cost.add_usage(synth.usage)
+                            trace.event(
+                                "llm.response",
+                                iteration=iterations,
+                                stop_reason=synth.stop_reason,
+                                usage=cost.summary(),
+                                phase="wall_synthesis",
+                            )
+                            req_in = getattr(synth.usage, "input_tokens", None) or 0
+                            if req_in > settings.max_context_tokens:
+                                trace.event(
+                                    "wall_synthesis.context_budget",
+                                    input_tokens=req_in,
+                                )
+                                return self._finalize_insufficient(
+                                    reason=(
+                                        f"{wall_reason}; synthesis request exceeded "
+                                        f"context cap ({req_in} tokens)"
+                                    ),
+                                    halt_reason="wall_budget_exhausted",
+                                    status="halted_wall_budget",
+                                    run_id=run_id,
+                                    company=company,
+                                    started=started,
+                                    cost=cost,
+                                    iterations=iterations,
+                                    tool_calls=tool_calls_used,
+                                    trace=trace,
+                                    run_dir=run_dir,
+                                )
+                            if synth.stop_reason == "max_tokens":
+                                return self._finalize_insufficient(
+                                    reason=(
+                                        f"{wall_reason}; synthesis hit max_tokens "
+                                        f"({settings.wall_synthesis_max_tokens})"
+                                    ),
+                                    halt_reason="wall_budget_exhausted",
+                                    status="halted_wall_budget",
+                                    run_id=run_id,
+                                    company=company,
+                                    started=started,
+                                    cost=cost,
+                                    iterations=iterations,
+                                    tool_calls=tool_calls_used,
+                                    trace=trace,
+                                    run_dir=run_dir,
+                                )
+                            if synth.stop_reason != "end_turn":
+                                return self._finalize_insufficient(
+                                    reason=(
+                                        f"{wall_reason}; synthesis stop_reason="
+                                        f"{synth.stop_reason!r}"
+                                    ),
+                                    halt_reason="wall_budget_exhausted",
+                                    status="halted_wall_budget",
+                                    run_id=run_id,
+                                    company=company,
+                                    started=started,
+                                    cost=cost,
+                                    iterations=iterations,
+                                    tool_calls=tool_calls_used,
+                                    trace=trace,
+                                    run_dir=run_dir,
+                                )
+                            messages.append(
+                                {"role": "assistant", "content": synth.content}
+                            )
+                            text = _extract_text(synth)
+                            brief, parse_error = parse_brief_from_model_text(
+                                text,
+                                run_id=run_id,
+                                company=company,
+                                generated_at=datetime.now(UTC),
+                                max_tool_calls=settings.max_tool_calls,
+                            )
+                            if brief is None:
+                                trace.event(
+                                    "wall_synthesis.parse_error",
+                                    error=parse_error,
+                                    text_preview=text[:500],
+                                )
+                                return self._finalize_insufficient(
+                                    reason=f"{wall_reason}; synthesis parse failed: {parse_error}",
+                                    halt_reason="wall_budget_exhausted",
+                                    status="halted_wall_budget",
+                                    run_id=run_id,
+                                    company=company,
+                                    started=started,
+                                    cost=cost,
+                                    iterations=iterations,
+                                    tool_calls=tool_calls_used,
+                                    trace=trace,
+                                    run_dir=run_dir,
+                                )
+                            try:
+                                filtered, report = apply_filter(
+                                    brief,
+                                    fetched_urls=fetched_urls,
+                                    citation_urls=citation_urls,
+                                    seed_hosts=set(allowlist.seed_hosts),
+                                )
+                            except ComplianceHardStop as e:
+                                trace.incident(
+                                    "classified_marker_detected",
+                                    labels=sorted(
+                                        {h.pattern_label for h in e.hits}
+                                    ),
+                                )
+                                return self._finalize_insufficient(
+                                    reason=(
+                                        f"{wall_reason}; synthesis brief failed "
+                                        "compliance scan"
+                                    ),
+                                    halt_reason="compliance_hard_stop",
+                                    status="compliance_hard_stop",
+                                    run_id=run_id,
+                                    company=company,
+                                    started=started,
+                                    cost=cost,
+                                    iterations=iterations,
+                                    tool_calls=tool_calls_used,
+                                    trace=trace,
+                                    run_dir=run_dir,
+                                )
+                            trace.event(
+                                "brief.filtered",
+                                phase="wall_synthesis",
+                                dropped_hooks=[url for url, _ in report.dropped_hooks],
+                                downgraded=report.downgraded_verdict,
+                                compliance_hit_labels=[
+                                    h.pattern_label for h in report.compliance_hits
+                                ],
+                            )
+                            filtered = filtered.model_copy(
+                                update={
+                                    "tool_calls_used": tool_calls_used,
+                                    "tool_calls_budget": settings.max_tool_calls,
+                                    "wall_seconds": round(time.monotonic() - started, 3),
+                                    "cost_usd": round(cost.total_usd, 6),
+                                }
+                            )
+                            _write_brief(run_dir, filtered)
+                            trace.event(
+                                "agent.end",
+                                status="halted_wall_budget_synthesized",
+                                verdict=filtered.verdict,
+                                track=filtered.track,
+                                tool_calls_used=tool_calls_used,
+                                wall_s=filtered.wall_seconds,
+                                cost_usd=filtered.cost_usd,
+                                reason=wall_reason,
+                            )
+                            emit(
+                                f"Brief written (post-wall synthesis) → "
+                                f"{run_dir / 'brief.json'}"
+                            )
+                            return AgentResult(
+                                status="halted_wall_budget_synthesized",
+                                brief=filtered,
+                                iterations=iterations,
+                                tool_calls_used=tool_calls_used,
+                                cost_usd=round(cost.total_usd, 6),
+                                wall_seconds=filtered.wall_seconds,
+                                run_dir=str(run_dir),
+                                cost_summary=cost.summary(),
+                            )
+
+                        trace.event("halt.wall_budget", wall_s=wall, phase="stub")
                         return self._finalize_insufficient(
-                            reason=(
-                                f"wall budget exceeded "
-                                f"({wall:.1f}s > {settings.max_wall_seconds}s)"
-                            ),
+                            reason=wall_reason,
                             halt_reason="wall_budget_exhausted",
                             status="halted_wall_budget",
                             run_id=run_id,
@@ -256,12 +511,48 @@ class Agent:
                             run_dir=run_dir,
                         )
 
+                    # ── One-time reserve nudge (finalize before hard wall) ──
+                    if (
+                        settings.wall_reserve_seconds > 0
+                        and wall
+                        >= settings.max_wall_seconds - settings.wall_reserve_seconds
+                        and not reserve_nudge_sent
+                    ):
+                        reserve_nudge_sent = True
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": _wall_reserve_nudge_message(
+                                    max_wall_seconds=settings.max_wall_seconds,
+                                    reserve_seconds=settings.wall_reserve_seconds,
+                                ),
+                            }
+                        )
+
+                    allow_tools = tool_calls_used < settings.max_tool_calls
+                    if (
+                        allow_tools
+                        and settings.wall_no_tools_buffer_seconds > 0
+                        and wall
+                        >= settings.max_wall_seconds
+                        - settings.wall_no_tools_buffer_seconds
+                    ):
+                        allow_tools = False
+
                     # ── LLM call ────────────────────────────────
                     trace.event("llm.request", iteration=iterations, msg_count=len(messages))
                     response = await self._call_llm(
                         messages,
-                        allow_tools=tool_calls_used < settings.max_tool_calls,
+                        allow_tools=allow_tools,
+                        container_id=container_id,
                     )
+                    # Capture/refresh the sandbox container id for server
+                    # tools; thread it on subsequent tool-enabled turns only
+                    # (see _call_llm: no `container` when allow_tools=False).
+                    new_container = getattr(response, "container", None)
+                    new_container_id = getattr(new_container, "id", None)
+                    if new_container_id:
+                        container_id = new_container_id
                     cost.add_usage(response.usage)
                     trace.event(
                         "llm.response",
@@ -331,6 +622,21 @@ class Agent:
                                 error=parse_error,
                                 text_preview=text[:500],
                             )
+                            if brief_parse_repair_attempts == 0:
+                                brief_parse_repair_attempts += 1
+                                trace.event(
+                                    "brief.parse_repair_requested",
+                                    error=parse_error,
+                                )
+                                messages.append(
+                                    {
+                                        "role": "user",
+                                        "content": _brief_parse_repair_user_message(
+                                            parse_error=parse_error,
+                                        ),
+                                    }
+                                )
+                                continue
                             return self._finalize_insufficient(
                                 reason=f"model output did not parse as Brief: {parse_error}",
                                 halt_reason="internal_error",
@@ -350,6 +656,7 @@ class Agent:
                                 brief,
                                 fetched_urls=fetched_urls,
                                 citation_urls=citation_urls,
+                                seed_hosts=set(allowlist.seed_hosts),
                             )
                         except ComplianceHardStop as e:
                             trace.incident(
@@ -371,6 +678,44 @@ class Agent:
                                 trace=trace,
                                 run_dir=run_dir,
                             )
+
+                        # Repair loop — give the model one chance to swap
+                        # out untraced citations before we downgrade.
+                        # Historically, runs like forterra and secondfront
+                        # went low_confidence purely because the model
+                        # invented URLs; letting it retry with an explicit
+                        # list of trace-backed URLs recovers the verdict
+                        # most of the time, for the cost of one extra LLM
+                        # round trip (no extra tool calls).
+                        hook_drops_only = (
+                            report.dropped_hooks
+                            and not any(
+                                h.severity is Severity.WARN
+                                for h in report.compliance_hits
+                            )
+                        )
+                        if (
+                            hook_drops_only
+                            and repair_attempts == 0
+                            and brief.verdict != "insufficient_data"
+                        ):
+                            repair_attempts += 1
+                            repair_msg = _repair_user_message(
+                                dropped=[u for u, _ in report.dropped_hooks],
+                                fetched_urls=fetched_urls,
+                                citation_urls=citation_urls,
+                                seed_hosts=set(allowlist.seed_hosts),
+                            )
+                            trace.event(
+                                "brief.repair_requested",
+                                dropped_hooks=[
+                                    url for url, _ in report.dropped_hooks
+                                ],
+                            )
+                            messages.append(
+                                {"role": "user", "content": repair_msg}
+                            )
+                            continue
 
                         trace.event(
                             "brief.filtered",
@@ -524,6 +869,36 @@ class Agent:
                     trace=trace,
                     run_dir=run_dir,
                 )
+            except BaseException as e:
+                # Catch BaseException (KeyboardInterrupt, CancelledError,
+                # SystemExit) so we always leave a brief.json on disk.
+                # Before this, the sales UI saw "Agent produced no stdout"
+                # when a batch was cancelled mid-row — see
+                # runs/cape-co/2026-04-20T21-22-28Z/trace.jsonl, which ends
+                # in agent.end{status:"error", error_type:"SystemExit"}
+                # but never wrote a brief.
+                trace.event(
+                    "halt.cancelled",
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+                self._finalize_insufficient(
+                    reason=(
+                        "run cancelled before brief emitted: "
+                        f"{type(e).__name__}"
+                    ),
+                    halt_reason="internal_error",
+                    status="error",
+                    run_id=run_id,
+                    company=company,
+                    started=started,
+                    cost=cost,
+                    iterations=iterations,
+                    tool_calls=tool_calls_used,
+                    trace=trace,
+                    run_dir=run_dir,
+                )
+                raise
 
     # ── Internals ───────────────────────────────────────────────────
 
@@ -532,22 +907,50 @@ class Agent:
         messages: list[dict[str, Any]],
         *,
         allow_tools: bool,
+        container_id: str | None = None,
+        max_tokens: int | None = None,
     ) -> Message:
         custom_schemas = self.registry.to_anthropic_schemas()
         tools: list[dict[str, Any]] = (
             [*custom_schemas, WEB_SEARCH_TOOL] if allow_tools else []
         )
 
+        # Prompt caching — system prompt + tool schemas are identical across
+        # every iteration of a run (~12k tokens), so mark the tail of the
+        # static prefix as an ephemeral cache breakpoint. Subsequent calls
+        # within the 5-minute window bill cache-read prices (~10%) instead
+        # of fresh input. Traces prior to this change show `cache_read_tokens: 0`
+        # on every llm.response — e.g. tanium iter1→iter4 grew 11k→164k
+        # input tokens and rebilled the prefix every step.
+        system_blocks: list[dict[str, Any]] = [
+            {
+                "type": "text",
+                "text": self.system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+
+        cached_tools: list[dict[str, Any]] = list(tools)
+        if cached_tools:
+            last = dict(cached_tools[-1])
+            last["cache_control"] = {"type": "ephemeral"}
+            cached_tools[-1] = last
+
         kwargs: dict[str, Any] = {
             "model": self.model,
-            "max_tokens": settings.max_tokens,
-            "system": self.system_prompt,
+            "max_tokens": max_tokens if max_tokens is not None else settings.max_tokens,
+            "system": system_blocks,
             "messages": messages,
         }
-        if tools:
-            kwargs["tools"] = tools
+        if cached_tools:
+            kwargs["tools"] = cached_tools
         if settings.thinking_adaptive:
             kwargs["thinking"] = {"type": "adaptive"}
+        # Anthropic: `container` is only valid alongside the code execution
+        # tool path; our tools-off phases (wall buffer, post-wall synthesis)
+        # must not pass it or the API returns invalid_request_error.
+        if container_id and allow_tools:
+            kwargs["container"] = container_id
 
         async def _do() -> Message:
             try:
@@ -673,6 +1076,34 @@ class Agent:
                     fetched_urls.add(final)
                     allowlist.accept_citation(final)
 
+            if tool_name == "lookup_fedramp_marketplace_products" and isinstance(
+                result, dict
+            ):
+                if "error" not in result:
+                    for key in ("catalog_request_url", "marketplace_ui_url"):
+                        u = result.get(key)
+                        if isinstance(u, str) and u.startswith(("http://", "https://")):
+                            citation_urls.add(u)
+                            allowlist.accept_citation(u)
+                    for m in result.get("matches") or []:
+                        if isinstance(m, dict):
+                            du = m.get("detail_url")
+                            if isinstance(du, str) and du.startswith(
+                                ("http://", "https://")
+                            ):
+                                citation_urls.add(du)
+                                allowlist.accept_citation(du)
+
+            if tool_name == "lookup_usaspending_awards" and isinstance(result, dict):
+                if "error" not in result:
+                    for a in result.get("awards") or []:
+                        if not isinstance(a, dict):
+                            continue
+                        u = a.get("source_url")
+                        if isinstance(u, str) and u.startswith(("http://", "https://")):
+                            citation_urls.add(u)
+                            allowlist.accept_citation(u)
+
             _progress_for_tool(tool_name, result, emit)
 
             is_error = isinstance(result, dict) and "error" in result
@@ -795,10 +1226,81 @@ def _write_brief(run_dir: Path, brief: Brief) -> None:
     )
 
 
+def _wall_synthesis_user_message(*, company: str, wall_reason: str) -> str:
+    return "\n".join(
+        [
+            "SYSTEM: The wall-clock budget for this run is exhausted.",
+            f"({wall_reason})",
+            "",
+            "You must NOT call any tools. Emit exactly one JSON object matching "
+            "the Brief schema using ONLY evidence already present in this "
+            "conversation (tool results and prior assistant text).",
+            "",
+            "Requirements:",
+            f"  • company_name_queried: use the queried company ({company!r}) verbatim.",
+            "  • verdict: prefer low_confidence unless the transcript already contains "
+            "multiple independent, explicit signals for high_confidence.",
+            "  • why_not_confident: one sentence mentioning the wall-clock limit and "
+            "anything you could not verify without more time/tools.",
+            "  • Every hook.citation_url must appear in this run's tool trace "
+            "(web_search citations or fetch_company_page URLs). Do not invent URLs.",
+            "  • sales_conversation_prep.federal_prime_awards: at most 5 items.",
+            "  • revenue_estimate.source must be one of: sec_filing, press_release, "
+            "analyst_estimate, federal_awards_proxy, inferred_from_headcount, "
+            "not_determinable.",
+            "  • Do not fabricate contracts, UEIs, or FedRAMP status — use unknown / "
+            "null where the transcript is silent.",
+            "  • halt_reason: if set for this timeout, must be the exact string "
+            '"wall_budget_exhausted" (schema literal — not "wall_budget_exceeded").',
+            "",
+            "Emit exactly one JSON object. No other text.",
+        ]
+    )
+
+
+def _wall_reserve_nudge_message(
+    *, max_wall_seconds: int, reserve_seconds: int
+) -> str:
+    return "\n".join(
+        [
+            "SYSTEM: You are inside the final reserve window on wall-clock budget "
+            f"({reserve_seconds}s before the {max_wall_seconds}s cap).",
+            "",
+            "Prefer at most one more high-leverage tool turn if absolutely needed, "
+            "then STOP and emit the final Brief JSON. If you already have enough "
+            "signal, emit the JSON now without additional tools.",
+            "",
+            "When uncertain, prefer low_confidence with honest why_not_confident "
+            "over insufficient_data, as long as hooks only cite trace-backed URLs.",
+        ]
+    )
+
+
+def _brief_parse_repair_user_message(*, parse_error: str) -> str:
+    return "\n".join(
+        [
+            "Your last message was supposed to be exactly one JSON Brief object, "
+            "but it failed schema validation.",
+            "",
+            f"Validation error: {parse_error}",
+            "",
+            "Fix the JSON and re-emit exactly one Brief object. Common fixes:",
+            "  • revenue_estimate.source — use only allowed enum values (see prior "
+            "system instructions).",
+            "  • sales_conversation_prep.federal_prime_awards — at most 5 entries.",
+            "  • target_roles ≤ 5, hooks ≤ 8.",
+            "",
+            "Do NOT call any tools. Emit only the corrected JSON object.",
+        ]
+    )
+
+
 def _initial_user_message(
     *,
     company: str,
     domain: str | None,
+    poc_name: str | None,
+    poc_title: str | None,
     run_id: str,
     started_at: datetime,
 ) -> str:
@@ -808,12 +1310,24 @@ def _initial_user_message(
     ]
     if domain:
         parts.append(f"- Domain: {domain}")
+    if poc_name or poc_title:
+        parts.append(
+            "- Sales-provided context (not verified by tools; do not treat as SAM or "
+            "registry fact):"
+        )
+        if poc_name:
+            parts.append(f"  - Stated point of contact: {poc_name}")
+        if poc_title:
+            parts.append(f"  - Stated role / position: {poc_title}")
     parts.extend([
         f"- Run ID (include in your brief.run_id verbatim): {run_id}",
         f"- Caller timestamp (include as brief.generated_at): {started_at.isoformat()}",
         "",
         "Start with lookup_sam_registration. Then call USAspending/SBIR in "
-        "parallel if SAM returned an active entity. Use web_search to "
+        "parallel if SAM returned an active entity. Always call "
+        "lookup_fedramp_marketplace_products once with your best search phrase "
+        "(SAM legal name or queried name); empty matches are normal — set "
+        "sales_conversation_prep.fedramp_posture and continue. Use web_search to "
         "gather press and persona signal. Only call fetch_company_page on "
         "URLs that came from web_search citations or that match the "
         "company's own domain.",
@@ -823,6 +1337,54 @@ def _initial_user_message(
         "within budget (emit insufficient_data).",
     ])
     return "\n".join(parts)
+
+
+def _repair_user_message(
+    *,
+    dropped: list[str],
+    fetched_urls: set[str],
+    citation_urls: set[str],
+    seed_hosts: set[str],
+) -> str:
+    """Ask the model to re-emit the brief with trace-backed citations.
+
+    We do this once per run instead of silently downgrading the verdict,
+    because pre-repair analysis of runs/forterra-com and runs/secondfront-com
+    showed the model was cherry-picking URLs from training data that a
+    single retry could have fixed (e.g. substituting a secondfront.com URL
+    for a prnewswire.com one, or removing a phantom usaspending.gov link).
+    """
+    # Cap the allowed-URL list so we don't balloon context on repair.
+    allowed_sorted = sorted(fetched_urls | citation_urls)
+    allowed_preview = allowed_sorted[:30]
+    seed_list = ", ".join(sorted(seed_hosts)) or "(none)"
+    lines = [
+        "Your last brief cited URLs that were not returned by any tool "
+        "in this run. The output validator will drop them.",
+        "",
+        "Dropped URLs:",
+        *(f"  - {u}" for u in dropped),
+        "",
+        "Fix this and re-emit the final brief:",
+        "  • Replace each dropped URL with one of the trace-backed URLs "
+        "below, OR remove the hook entirely.",
+        "  • You MAY also cite any URL on the prospect's own domain "
+        f"(seed hosts: {seed_list}); those are pre-allowlisted.",
+        "  • Do NOT invent new URLs. Do NOT call any more tools.",
+        "",
+        "Trace-backed URLs from this run (truncated to first 30):",
+        *(f"  - {u}" for u in allowed_preview),
+    ]
+    if len(allowed_sorted) > len(allowed_preview):
+        lines.append(f"  … and {len(allowed_sorted) - len(allowed_preview)} more.")
+    lines.extend(
+        [
+            "",
+            "Emit exactly one JSON object matching the Brief schema. No "
+            "other text.",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _progress_for_tool(
@@ -846,6 +1408,10 @@ def _progress_for_tool(
         n = result.get("total_awards_found") or 0
         p3 = result.get("phase_iii_count") or 0
         emit(f"SBIR: {n} awards ({p3} Phase III)")
+    elif tool_name == "lookup_fedramp_marketplace_products":
+        res = result.get("marketplace_resolution", "?")
+        n = len(result.get("matches") or [])
+        emit(f"FedRAMP marketplace: {res} ({n} matches)")
     elif tool_name == "fetch_company_page":
         u = result.get("final_url") or result.get("url") or ""
         inj = result.get("injection_signals") or []
@@ -861,13 +1427,20 @@ async def research(
     registry: ToolRegistry,
     *,
     domain: str | None = None,
+    poc_name: str | None = None,
+    poc_title: str | None = None,
     run_dir: Path | None = None,
     progress: Callable[[str], None] | None = None,
     **kwargs: Any,
 ) -> AgentResult:
     agent = Agent(registry=registry, **kwargs)
     return await agent.research(
-        company, domain=domain, run_dir=run_dir, progress=progress
+        company,
+        domain=domain,
+        poc_name=poc_name,
+        poc_title=poc_title,
+        run_dir=run_dir,
+        progress=progress,
     )
 
 

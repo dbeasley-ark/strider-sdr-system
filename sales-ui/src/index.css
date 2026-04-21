@@ -1329,6 +1329,13 @@ label.field input::placeholder {
   border-color: var(--fg-muted);
 }
 
+.btn-compact {
+  padding: 6px 12px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;
@@ -1428,6 +1435,26 @@ table.batch td {
   gap: var(--space-5);
 }
 
+.brief-feed-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.brief-feed-head .h3 {
+  margin: 0;
+}
+
+.brief-feed-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+}
+
 .brief-card {
   background: var(--brief-card-bg);
   border: 1px solid var(--brief-card-border);
@@ -1437,6 +1464,19 @@ table.batch td {
 
 .brief-card-head {
   margin-bottom: var(--space-4);
+}
+
+.brief-card-head-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.brief-card-head-row .brief-card-kicker {
+  margin-bottom: 0;
 }
 
 .brief-card-kicker {
@@ -1547,6 +1587,39 @@ table.batch td {
   color: var(--fg-muted);
   font-weight: 400;
   margin: 0 0 var(--space-2);
+}
+
+.brief-dl {
+  padding-left: 0;
+  list-style: none;
+}
+
+.brief-dl-row {
+  display: grid;
+  grid-template-columns: minmax(5rem, 7rem) 1fr;
+  gap: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-3);
+  font-size: var(--fs-small);
+  line-height: 1.5;
+}
+
+.brief-dl-row dt {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.brief-dl-row dd {
+  margin: 0;
+  color: var(--fg);
+}
+
+.brief-dl-notes {
+  margin: var(--space-2) 0 0;
+  font-size: var(--fs-small);
 }
 
 .brief-list,

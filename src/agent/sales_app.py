@@ -24,12 +24,14 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 from agent.spreadsheet_import import ParsedSheet, SpreadsheetParseError, parse_prospect_spreadsheet
 
@@ -45,6 +47,26 @@ def _repo_root() -> Path:
 
 
 REPO_ROOT = _repo_root()
+
+
+def domain_hint_from_website(s: str | None) -> str | None:
+    """Turn a rep-pasted website or URL into a domain hint for ``--domain``."""
+    if s is None:
+        return None
+    t = s.strip()
+    if not t:
+        return None
+    if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", t):
+        t = "https://" + t
+    parsed = urlparse(t)
+    host = (parsed.netloc or "").strip().lower()
+    if not host and parsed.path:
+        host = parsed.path.split("/", 1)[0].strip().lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if ":" in host:
+        host = host.split(":", 1)[0]
+    return host or None
 
 
 def _pythonpath_for_subprocess() -> dict[str, str]:
@@ -66,6 +88,8 @@ class RowResult:
     brief: dict[str, Any] | None = None
     run_dir: str | None = None
     error: str | None = None
+    poc_name: str | None = None
+    poc_title: str | None = None
 
 
 @dataclass
@@ -77,17 +101,41 @@ class BatchJob:
     events: list[dict[str, Any]] = field(default_factory=list)
     finished: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    row_poc: list[tuple[str | None, str | None]] | None = None
 
     def __post_init__(self) -> None:
         if not self.rows:
+            n = len(self.parsed.rows)
+            pairs = self.row_poc if self.row_poc is not None else [(None, None)] * n
+            if len(pairs) != n:
+                raise ValueError(
+                    f"row_poc length {len(pairs)} does not match parsed.rows length {n}"
+                )
             self.rows = [
-                RowResult(index=i, company=c, domain=d, status="pending")
-                for i, (c, d) in enumerate(self.parsed.rows)
+                RowResult(
+                    index=i,
+                    company=c,
+                    domain=d,
+                    status="pending",
+                    poc_name=pn,
+                    poc_title=pt,
+                )
+                for i, ((c, d), (pn, pt)) in enumerate(
+                    zip(self.parsed.rows, pairs, strict=True)
+                )
             ]
 
 
 JOBS: dict[str, BatchJob] = {}
 JOBS_LOCK = asyncio.Lock()
+
+
+class SingleRunRequest(BaseModel):
+    company: str = Field(min_length=1)
+    website: str | None = None
+    poc_name: str | None = None
+    poc_title: str | None = None
+
 
 # Agent CLI: 0 ok, 1 halted/insufficient, 2 error/compliance — all may print a Brief.
 _AGENT_OK_EXIT_CODES = frozenset({0, 1, 2})
@@ -168,6 +216,10 @@ async def _run_batch(job_id: str) -> None:
         ]
         if row.domain:
             cmd.extend(["--domain", row.domain])
+        if row.poc_name:
+            cmd.extend(["--poc-name", row.poc_name])
+        if row.poc_title:
+            cmd.extend(["--poc-title", row.poc_title])
 
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -341,6 +393,66 @@ def create_app() -> FastAPI:
         return {
             "job_id": job_id,
             "filename": name,
+            "row_count": len(parsed.rows),
+            "headers": parsed.headers,
+            "company_column_index": parsed.company_column,
+            "domain_column_index": parsed.domain_column,
+            "rows": [
+                {"index": i, "company": c, "domain": d}
+                for i, (c, d) in enumerate(parsed.rows)
+            ],
+        }
+
+    @app.post("/api/single")
+    async def post_single(
+        background_tasks: BackgroundTasks,
+        body: SingleRunRequest,
+    ) -> dict[str, Any]:
+        company = body.company.strip()
+        if not company:
+            raise HTTPException(status_code=400, detail="company is required.")
+        domain = domain_hint_from_website(body.website)
+        poc_name = (
+            body.poc_name.strip()
+            if body.poc_name and body.poc_name.strip()
+            else None
+        )
+        poc_title = (
+            body.poc_title.strip()
+            if body.poc_title and body.poc_title.strip()
+            else None
+        )
+
+        if domain:
+            parsed = ParsedSheet(
+                headers=["Company", "Domain"],
+                company_column=0,
+                domain_column=1,
+                rows=[(company, domain)],
+            )
+        else:
+            parsed = ParsedSheet(
+                headers=["Company"],
+                company_column=0,
+                domain_column=None,
+                rows=[(company, None)],
+            )
+
+        job_id = str(uuid.uuid4())
+        job = BatchJob(
+            job_id=job_id,
+            filename="single-run",
+            parsed=parsed,
+            row_poc=[(poc_name, poc_title)],
+        )
+        async with JOBS_LOCK:
+            JOBS[job_id] = job
+
+        background_tasks.add_task(_run_batch, job_id)
+
+        return {
+            "job_id": job_id,
+            "filename": job.filename,
             "row_count": len(parsed.rows),
             "headers": parsed.headers,
             "company_column_index": parsed.company_column,

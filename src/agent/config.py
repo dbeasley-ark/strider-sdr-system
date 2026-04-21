@@ -52,13 +52,23 @@ class Settings(BaseSettings):
     thinking_adaptive: bool = True
 
     # ── Budgets (hard rails — §1 + §6) ───────────────────────────────
-    max_tool_calls: int = 12
+    max_tool_calls: int = 13
     max_cost_usd: float = 0.50
     max_wall_seconds: int = 90
     # Per API request (usage.input_tokens). Web search + tool payloads often land
     # in the 50–80k range; 40k was halting otherwise-successful runs.
     max_context_tokens: int = 128_000
     max_iterations: int = 20
+
+    # ── Wall clock: reserve + post-wall synthesis ─────────────────────
+    # When remaining wall < reserve, inject a one-time user nudge to finalize.
+    wall_reserve_seconds: int = 25
+    # In the last N seconds of wall budget, disable tools (force JSON soon).
+    # Set to 0 to disable.
+    wall_no_tools_buffer_seconds: int = 10
+    # After max_wall_seconds, one tools-off LLM call to turn trace into a Brief.
+    wall_synthesis_enabled: bool = True
+    wall_synthesis_max_tokens: int = 4096
 
     # ── Observability ────────────────────────────────────────────────
     runs_dir: Path = Field(default=Path("./runs"), alias="AGENT_RUNS_DIR")
@@ -100,6 +110,22 @@ def _validate_startup(settings: Settings) -> None:
             "ANTHROPIC_API_KEY is missing or malformed (expected 'sk-ant-...')."
         )
 
+    # Guard against stale/typo'd model slugs. The 19:55 UTC batch failed every
+    # run with `model: claude-sonnet-4-7` (doesn't exist); fail loud at startup
+    # instead of burning an iteration per row. PRICING_PER_MTOK is also the
+    # cost-budget source-of-truth, so keeping them aligned avoids silent fallback
+    # to Opus pricing for an unknown model.
+    from agent.observability.cost import PRICING_PER_MTOK  # local import: avoid cycle
+
+    if settings.model not in PRICING_PER_MTOK:
+        known = ", ".join(sorted(PRICING_PER_MTOK))
+        raise ConfigError(
+            f"AGENT_MODEL={settings.model!r} is not a known Claude model slug. "
+            f"Known slugs: {known}. "
+            "If you recently updated Anthropic's catalog, add the new slug to "
+            "PRICING_PER_MTOK in src/agent/observability/cost.py."
+        )
+
     sk = settings.sam_gov_api_key.get_secret_value().strip()
     if settings.sam_gov_optional:
         # Optional SAM: empty is fine. Short values (e.g. `...` from .env.example)
@@ -132,6 +158,11 @@ if os.environ.get("_AGENT_SKIP_STARTUP_CHECKS") == "1":
         enabled=True,
         anthropic_api_key=SecretStr(""),
         sam_gov_api_key=SecretStr(""),
+        model="claude-opus-4-7",
+        wall_reserve_seconds=25,
+        wall_no_tools_buffer_seconds=10,
+        wall_synthesis_enabled=True,
+        wall_synthesis_max_tokens=4096,
     )
 else:
     settings = Settings()  # type: ignore[call-arg]

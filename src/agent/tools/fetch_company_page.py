@@ -66,10 +66,15 @@ class FetchCompanyPageInput(BaseModel):
         ),
     )
     max_bytes: int = Field(
-        default=500_000,
+        default=120_000,
         ge=1_000,
         le=5_000_000,
-        description="Hard cap on bytes read from the response body. 500KB default.",
+        description=(
+            "Hard cap on bytes read from the response body. Default 120KB "
+            "(~25k tokens of extracted text, plenty for /about, /careers, "
+            "or a press release). Raise only when you know the page is "
+            "dense and you've already exhausted shorter signals."
+        ),
     )
     timeout_seconds: float = Field(
         default=10.0,

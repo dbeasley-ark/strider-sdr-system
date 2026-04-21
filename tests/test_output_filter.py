@@ -13,7 +13,14 @@ from datetime import datetime, timezone
 
 import pytest
 
-from agent.brief import Brief, PersonalizationHook, RevenueEstimate
+from agent.brief import (
+    Brief,
+    FedrampPosturePrep,
+    PersonalizationHook,
+    RevenueEstimate,
+    SalesConversationPrep,
+    WhatTheyDoPrep,
+)
 from agent.security.output_filter import ComplianceHardStop, apply_filter
 
 
@@ -43,7 +50,7 @@ def _base_brief(
         target_roles=[],
         hooks=hooks or [],
         tool_calls_used=5,
-        tool_calls_budget=12,
+        tool_calls_budget=13,
         wall_seconds=60.0,
         cost_usd=0.35,
     )
@@ -108,3 +115,100 @@ def test_all_hooks_dropped_downgrades() -> None:
     assert filtered.verdict == "low_confidence"
     assert filtered.hooks == []
     assert report.downgraded_verdict
+
+
+def test_seed_domain_citation_is_accepted_without_fetch() -> None:
+    """Hooks citing the prospect's own domain should be accepted even
+    when no fetch landed on that exact URL — the domain was on the
+    run's allowlist from the start.
+    """
+    hook = PersonalizationHook(
+        text="Cited the company's own press page about Game Warden.",
+        citation_url="https://www.secondfront.com/resources/news/some-press",
+    )
+    brief = _base_brief(
+        hooks=[hook],
+        rationale=(
+            "Strong Track 1 signal: active DoD primes, Game Warden ATOs, "
+            "and Series C momentum put this squarely in the target band."
+        ),
+    )
+    filtered, report = apply_filter(
+        brief,
+        fetched_urls=set(),
+        citation_urls=set(),
+        seed_hosts={"secondfront.com"},
+    )
+    assert len(filtered.hooks) == 1
+    assert filtered.verdict == "high_confidence"
+    assert report.dropped_hooks == []
+
+
+def test_seed_domain_subdomain_matches() -> None:
+    hook = PersonalizationHook(
+        text="Press page on a subdomain of the company's site.",
+        citation_url="https://ir.example.com/news/q4-results",
+    )
+    brief = _base_brief(
+        hooks=[hook],
+        rationale=(
+            "Strong public signal from the IR subdomain plus DoD primes "
+            "in USAspending make this a confident Track 1 call."
+        ),
+    )
+    filtered, _ = apply_filter(
+        brief,
+        fetched_urls=set(),
+        citation_urls=set(),
+        seed_hosts={"example.com"},
+    )
+    assert len(filtered.hooks) == 1
+
+
+def test_sales_prep_citation_dropped_when_not_in_trace() -> None:
+    good = "https://www.fedramp.gov/marketplace/products.json"
+    sp = SalesConversationPrep(
+        what_they_do=WhatTheyDoPrep(
+            summary="They build widgets for agencies.",
+            citation_url="https://evil.com/fake-about",
+        ),
+        fedramp_posture=FedrampPosturePrep(
+            status="no_marketplace_ties",
+            citation_url=good,
+        ),
+    )
+    brief = _base_brief()
+    brief = brief.model_copy(update={"sales_conversation_prep": sp})
+    filtered, report = apply_filter(
+        brief,
+        fetched_urls=set(),
+        citation_urls={good},
+        seed_hosts=set(),
+    )
+    assert filtered.sales_conversation_prep.what_they_do.citation_url is None
+    assert str(filtered.sales_conversation_prep.fedramp_posture.citation_url) == good
+    assert any("evil.com" in u for u, _ in report.dropped_sp_citations)
+
+
+def test_seed_domain_does_not_accept_lookalike() -> None:
+    hook = PersonalizationHook(
+        text="Lookalike domain should not piggyback on the seed.",
+        citation_url="https://notexample.com/news/bad",
+    )
+    brief = _base_brief(
+        hooks=[hook],
+        rationale=(
+            "Track 1 signals from elsewhere; testing that lookalikes "
+            "cannot exploit the seed-host bypass in the validator."
+        ),
+    )
+    filtered, report = apply_filter(
+        brief,
+        fetched_urls=set(),
+        citation_urls=set(),
+        seed_hosts={"example.com"},
+    )
+    assert filtered.hooks == []
+    assert report.dropped_hooks and report.dropped_hooks[0][0].startswith(
+        "https://notexample.com"
+    )

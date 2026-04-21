@@ -14,10 +14,16 @@ from typing import Any, ClassVar, Literal
 import httpx
 from pydantic import BaseModel, Field, HttpUrl
 
-from agent.reliability import TransientError, with_retry, with_timeout
+from agent.reliability import TokenBucket, TransientError, with_retry, with_timeout
 from agent.tools._base import Tool
 
 _BASE_URL = "https://api.www.sbir.gov/public/api/awards"
+
+# SBIR.gov public API caps us at 10 requests / 10 minutes (verified via the
+# 403 payload seen in runs/secondfront-com/2026-04-20T21-20-42Z). Without a
+# client-side bucket, a batch of prospect runs burns the quota in seconds
+# and every subsequent call 403s. 0.9 req/min ≈ 9/10 min, leaving headroom.
+_sbir_bucket = TokenBucket(name="sbir.gov", rate_per_minute=0.9, capacity=1)
 
 
 class LookupSbirAwardsInput(BaseModel):
@@ -144,6 +150,25 @@ class LookupSbirAwards(Tool[LookupSbirAwardsInput, LookupSbirAwardsOutput]):
                 fetched_at=now,
                 error=f"transient: {e}",
             )
+        except RuntimeError as e:
+            # SBIR returns 403 with a rate-limit body when we burn the
+            # 10-requests-per-10-minutes quota. Surface it as a clean
+            # `rate_limited` result instead of a tool exception so the
+            # agent does not retry and can move on to web_search.
+            msg = str(e)
+            if "403" in msg and "rate limit" in msg.lower():
+                return LookupSbirAwardsOutput(
+                    recipient_name_query=inputs.recipient_name,
+                    identity_resolution=_resolution(inputs),
+                    awards=[],
+                    fetched_at=now,
+                    error=(
+                        "rate_limited: SBIR.gov quota hit "
+                        "(10 requests / 10 minutes). Skip SBIR for this run "
+                        "and rely on web_search."
+                    ),
+                )
+            raise
 
         if isinstance(data, dict):
             items = data.get("data") or data.get("awards") or []
@@ -258,6 +283,12 @@ def _parse_date(value: Any) -> date | None:
 
 
 async def _sbir_get(params: dict[str, Any]) -> Any:
+    # Wait (up to 30 s) for a bucket token so we stay under the SBIR quota.
+    # If the caller has already burned the quota elsewhere, the wait still
+    # ends after 30 s and we let the upstream 403 handler surface a clean
+    # rate_limited error to the agent.
+    await _sbir_bucket.acquire(timeout=30.0)
+
     async def _do() -> Any:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(_BASE_URL, params=params)

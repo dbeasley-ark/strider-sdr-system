@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import BriefCard from "./BriefCard";
 import {
@@ -6,6 +6,12 @@ import {
   type BriefFeedEntry,
   writeStoredBriefFeed,
 } from "./briefStorage";
+import {
+  buildBriefBundlePayload,
+  bundleBriefsFilename,
+  collectExportableEntries,
+  downloadJsonFile,
+} from "./exportBriefs";
 
 type ApiRow = {
   index: number;
@@ -97,11 +103,22 @@ export default function BatchWorkspace() {
     const stored = readStoredBriefFeed();
     if (stored?.entries?.length) {
       setBriefFeed(stored.entries);
+      if (stored.jobId) {
+        setJobId(stored.jobId);
+      }
+      if (stored.filename != null) {
+        setJobName(stored.filename);
+      }
     }
     return () => {
       esRef.current?.close();
     };
   }, []);
+
+  const [singleCompany, setSingleCompany] = useState("");
+  const [singleWebsite, setSingleWebsite] = useState("");
+  const [singlePocName, setSinglePocName] = useState("");
+  const [singlePocTitle, setSinglePocTitle] = useState("");
 
   const listenStream = useCallback((id: string, initial: RowView[], batchFilename: string) => {
     esRef.current?.close();
@@ -178,6 +195,67 @@ export default function BatchWorkspace() {
     };
   }, []);
 
+  const beginJob = useCallback(
+    (data: BatchCreateResponse) => {
+      setJobId(data.job_id);
+      setJobName(data.filename);
+      writeStoredBriefFeed({
+        version: 1,
+        jobId: data.job_id,
+        filename: data.filename,
+        entries: [],
+      });
+      setBriefFeed([]);
+      const initial: RowView[] = data.rows.map((r) => ({
+        ...r,
+        status: "pending" as const,
+      }));
+      setRows(initial);
+      listenStream(data.job_id, initial, data.filename);
+    },
+    [listenStream],
+  );
+
+  const onSubmitSingle = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const company = singleCompany.trim();
+    if (!company) return;
+    setErr(null);
+    setBusy(true);
+    setFinished(false);
+    setJobId(null);
+    setRows([]);
+    try {
+      const res = await fetch("/api/single", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          company,
+          website: singleWebsite.trim() || null,
+          poc_name: singlePocName.trim() || null,
+          poc_title: singlePocTitle.trim() || null,
+        }),
+      });
+      const text = await res.text();
+      if (!res.ok) {
+        let msg = text || res.statusText;
+        try {
+          const j = JSON.parse(text) as { detail?: string | unknown };
+          if (typeof j.detail === "string") msg = j.detail;
+        } catch {
+          /* keep msg */
+        }
+        throw new Error(msg);
+      }
+      const data = JSON.parse(text) as BatchCreateResponse;
+      beginJob(data);
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : "Request failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!file) return;
@@ -204,21 +282,7 @@ export default function BatchWorkspace() {
         throw new Error(msg);
       }
       const data = JSON.parse(text) as BatchCreateResponse;
-      setJobId(data.job_id);
-      setJobName(data.filename);
-      writeStoredBriefFeed({
-        version: 1,
-        jobId: data.job_id,
-        filename: data.filename,
-        entries: [],
-      });
-      setBriefFeed([]);
-      const initial: RowView[] = data.rows.map((r) => ({
-        ...r,
-        status: "pending",
-      }));
-      setRows(initial);
-      listenStream(data.job_id, initial, data.filename);
+      beginJob(data);
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : "Request failed.");
     } finally {
@@ -234,19 +298,91 @@ export default function BatchWorkspace() {
     downloadJson(jobName || "batch", snap);
   };
 
+  const onExportAllBriefs = useCallback(() => {
+    const stored = readStoredBriefFeed();
+    const entries = collectExportableEntries(briefFeed, rows);
+    if (!entries.length) return;
+    const jid = jobId ?? stored?.jobId ?? "unknown";
+    const jname = jobName ?? stored?.filename ?? null;
+    downloadJsonFile(
+      bundleBriefsFilename(jid, jname),
+      buildBriefBundlePayload(jid, jname, entries),
+    );
+  }, [briefFeed, rows, jobId, jobName]);
+
+  const exportableBriefEntries = useMemo(
+    () => collectExportableEntries(briefFeed, rows),
+    [briefFeed, rows],
+  );
+
   return (
     <>
       <div className="workspace-head">
         <div className="workspace-head-text">
           <h1 className="workspace-title">Prospect research</h1>
           <p className="muted workspace-sub">
-            Upload a company list. Rows run in order; briefs appear as each row finishes. Company
-            and domain columns auto-detect from common headers when left blank.
+            Run one company from the form below, or upload a list. Rows run in order; briefs appear
+            as each row finishes. Spreadsheet company and domain columns auto-detect from common
+            headers when left blank.
           </p>
         </div>
       </div>
 
       {err ? <div className="err-banner">{err}</div> : null}
+
+      <form className="card card--workspace" onSubmit={onSubmitSingle}>
+        <h3 className="h3 card-title">Single run</h3>
+        <p className="muted" style={{ marginTop: 0 }}>
+          Company name is required. Website improves domain allowlist seeding. Point of contact and
+          position are optional rep context (not verified by the agent).
+        </p>
+        <div className="field-grid">
+          <label className="field">
+            Company name
+            <input
+              value={singleCompany}
+              onChange={(e) => setSingleCompany(e.target.value)}
+              placeholder="e.g. Acme Industries"
+              autoComplete="organization"
+            />
+          </label>
+          <label className="field">
+            Website
+            <input
+              value={singleWebsite}
+              onChange={(e) => setSingleWebsite(e.target.value)}
+              placeholder="e.g. https://www.acme.com"
+              autoComplete="url"
+            />
+          </label>
+          <label className="field">
+            Point of contact
+            <input
+              value={singlePocName}
+              onChange={(e) => setSinglePocName(e.target.value)}
+              placeholder="Optional"
+              autoComplete="name"
+            />
+          </label>
+          <label className="field">
+            Position
+            <input
+              value={singlePocTitle}
+              onChange={(e) => setSinglePocTitle(e.target.value)}
+              placeholder="Optional (e.g. VP Engineering)"
+            />
+          </label>
+        </div>
+        <div className="actions">
+          <button
+            className="btn btn-primary"
+            type="submit"
+            disabled={!singleCompany.trim() || busy}
+          >
+            {busy ? "Starting…" : "Run research"}
+          </button>
+        </div>
+      </form>
 
       <form className="card card--workspace" onSubmit={onSubmit}>
         <h3 className="h3 card-title">Import</h3>
@@ -318,27 +454,42 @@ export default function BatchWorkspace() {
           <button className="btn btn-primary" type="submit" disabled={!file || busy}>
             {busy ? "Starting…" : "Run batch"}
           </button>
-          {jobId && finished ? (
-            <button className="btn btn-secondary" type="button" onClick={onExport}>
-              Download JSON
-            </button>
-          ) : null}
         </div>
       </form>
 
-      {briefFeed.length > 0 ? (
+      {jobId && finished ? (
+        <div className="actions" style={{ marginTop: 12 }}>
+          <button className="btn btn-secondary" type="button" onClick={onExport}>
+            Download full job JSON
+          </button>
+        </div>
+      ) : null}
+
+      {exportableBriefEntries.length > 0 ? (
         <section className="card brief-feed" aria-live="polite">
-          <h3 className="h3 card-title">Briefs</h3>
+          <div className="brief-feed-head">
+            <h3 className="h3 card-title">Briefs</h3>
+            <div className="brief-feed-actions">
+              <button
+                type="button"
+                className="btn btn-secondary btn-compact"
+                onClick={onExportAllBriefs}
+              >
+                Download all briefs (JSON)
+              </button>
+            </div>
+          </div>
           <p className="muted brief-feed-note">
             Updated as each row completes. Kept in this browser only (local storage).
           </p>
           <div className="brief-feed-list">
-            {briefFeed.map((e) => (
+            {exportableBriefEntries.map((e) => (
               <BriefCard
                 key={`${e.index}-${e.savedAt}`}
                 index={e.index}
                 company={e.company}
                 domain={e.domain}
+                savedAt={e.savedAt}
                 brief={e.brief}
               />
             ))}

@@ -10,7 +10,7 @@ Spec references: §1 (acceptance criteria), §7.1 (citation validation),
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, HttpUrl
@@ -101,6 +101,119 @@ class SourceSummary(BaseModel):
     )
 
 
+FedrampPostureStatus = Literal[
+    "unknown",
+    "no_marketplace_ties",
+    "fedramp_authorized",
+    "fedramp_in_process",
+    "agency_in_process",
+    "fedramp_ready",
+]
+
+
+class WhatTheyDoPrep(BaseModel):
+    """One-line what the company does (SDR-facing)."""
+
+    summary: str = Field(
+        default="Unknown.",
+        max_length=600,
+        description="Factual one-liner; cite a URL when not generic unknown.",
+    )
+    citation_url: HttpUrl | None = Field(
+        default=None,
+        description="Trace-backed URL when summary is specific.",
+    )
+
+
+class FedrampPosturePrep(BaseModel):
+    """FedRAMP marketplace posture — check every run; empty listing is normal."""
+
+    status: FedrampPostureStatus = Field(
+        default="unknown",
+        description=(
+            "no_marketplace_ties after a successful catalog lookup with zero "
+            "relevant rows; never use insufficient_data for this alone."
+        ),
+    )
+    stage: str | None = Field(
+        default=None,
+        max_length=120,
+        description="Raw marketplace status when listed (Authorized, In Process, …).",
+    )
+    notes: str | None = Field(
+        default=None,
+        max_length=500,
+        description="Optional press-only 'pursuing FedRAMP' context when marketplace silent.",
+    )
+    citation_url: HttpUrl | None = Field(
+        default=None,
+        description="Product detail URL or catalog/UI URL from tool trace.",
+    )
+
+
+class HrPeoPrep(BaseModel):
+    """HR PEO (co-employment) signal — company-level only."""
+
+    status: Literal["yes", "no", "unknown"] = Field(
+        default="unknown",
+        description="Whether the company appears to use an HR PEO.",
+    )
+    provider_hint: str | None = Field(
+        default=None,
+        max_length=120,
+        description="Named PEO vendor when status=yes and evidence supports it.",
+    )
+    citation_url: HttpUrl | None = None
+
+
+class LastFundingPrep(BaseModel):
+    """Last observed funding event (public signal only)."""
+
+    round_label: str | None = Field(default=None, max_length=80)
+    observed_date: date | None = Field(
+        default=None,
+        description="Closing or announcement date when known.",
+    )
+    confidence: Literal["high", "medium", "low", "unknown"] = "unknown"
+    citation_url: HttpUrl | None = None
+
+
+class FederalPrimeAwardLine(BaseModel):
+    """Top federal prime award line for the SDR."""
+
+    agency_or_context: str = Field(..., max_length=220)
+    amount_or_band: str = Field(..., max_length=120)
+    period_hint: str | None = Field(default=None, max_length=120)
+    citation_url: HttpUrl | None = Field(
+        default=None,
+        description="Prefer USAspending source_url from lookup_usaspending_awards.",
+    )
+
+
+class SalesConversationPrep(BaseModel):
+    """Structured answers sales asked for before the first call."""
+
+    what_they_do: WhatTheyDoPrep = Field(default_factory=WhatTheyDoPrep)
+    fedramp_posture: FedrampPosturePrep = Field(default_factory=FedrampPosturePrep)
+    hr_peo: HrPeoPrep = Field(default_factory=HrPeoPrep)
+    last_funding: LastFundingPrep = Field(default_factory=LastFundingPrep)
+    federal_prime_awards: list[FederalPrimeAwardLine] = Field(
+        default_factory=list,
+        max_length=5,
+    )
+
+
+def default_sales_conversation_prep() -> SalesConversationPrep:
+    """Conservative defaults for parse fallbacks and insufficient_data."""
+    return SalesConversationPrep(
+        what_they_do=WhatTheyDoPrep(summary="Not gathered in this run.", citation_url=None),
+        fedramp_posture=FedrampPosturePrep(status="unknown"),
+        hr_peo=HrPeoPrep(status="unknown"),
+        last_funding=LastFundingPrep(confidence="unknown"),
+        federal_prime_awards=[],
+    )
+
+
 class Brief(BaseModel):
     """The final, machine-readable prospect research brief.
 
@@ -145,6 +258,12 @@ class Brief(BaseModel):
     revenue_estimate: RevenueEstimate
     target_roles: list[TargetRole] = Field(..., min_length=0, max_length=5)
     hooks: list[PersonalizationHook] = Field(..., min_length=0, max_length=8)
+
+    # ── Sales conversation prep (structured) ─────────────────────────
+    sales_conversation_prep: SalesConversationPrep = Field(
+        default_factory=default_sales_conversation_prep,
+        description="FedRAMP check, PEO, funding, mission, top awards — unknown-safe.",
+    )
 
     # ── Provenance ───────────────────────────────────────────────────
     sources_used: list[SourceSummary] = Field(default_factory=list)
@@ -195,7 +314,7 @@ def insufficient_data(
         | None
     ) = None,
     tool_calls_used: int = 0,
-    tool_calls_budget: int = 12,
+    tool_calls_budget: int = 13,
     wall_seconds: float = 0.0,
     cost_usd: float = 0.0,
 ) -> Brief:
@@ -217,6 +336,7 @@ def insufficient_data(
         ),
         target_roles=[],
         hooks=[],
+        sales_conversation_prep=default_sales_conversation_prep(),
         halt_reason=halt_reason,
         tool_calls_used=tool_calls_used,
         tool_calls_budget=tool_calls_budget,

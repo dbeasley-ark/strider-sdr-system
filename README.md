@@ -69,6 +69,7 @@ Model, budgets (tool calls, USD cost, wall seconds, context), runs directory, an
 uv run python -m agent --company "Shield AI"
 uv run python -m agent --company shield.ai --domain shield.ai
 uv run python -m agent --company "Hadrian" --quiet
+uv run python -m agent --company "Contoso" --poc-name "Alex Kim" --poc-title "CTO"
 ```
 
 - **Stdout:** final brief as JSON (default; `--json` is explicit alias).
@@ -97,7 +98,7 @@ Optional: `AGENT_SALES_UI_HOST`, `AGENT_SALES_UI_PORT` (default `127.0.0.1:8765`
 cd sales-ui && npm install && npm run dev
 ```
 
-Open `http://localhost:5173`, upload a CSV/XLSX with company (and optionally domain) columns, start a batch job, and stream events.
+Open `http://localhost:5173`, use Single run for one company (optional website and POC fields) or upload a CSV/XLSX for a batch job; events stream the same way.
 
 **Production-style:** build the UI and serve it from the same process:
 
