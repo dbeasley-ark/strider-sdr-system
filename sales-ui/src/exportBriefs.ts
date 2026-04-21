@@ -98,3 +98,14 @@ export function bundleBriefsFilename(jobId: string, jobName: string | null): str
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
   return `briefs-${label}-${stamp}.json`;
 }
+
+export function singleBriefPdfFilename(entry: BriefFeedEntry): string {
+  const slug = safeFileSegment(entry.company);
+  return `brief-${slug}-row${entry.index + 1}.pdf`;
+}
+
+export function bundleBriefsPdfFilename(jobId: string, jobName: string | null): string {
+  const label = jobName ? safeFileSegment(jobName.replace(/\.[^.]+$/, "")) : safeFileSegment(jobId.slice(0, 8));
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  return `briefs-${label}-${stamp}.pdf`;
+}

@@ -9,9 +9,11 @@ import {
 import {
   buildBriefBundlePayload,
   bundleBriefsFilename,
+  bundleBriefsPdfFilename,
   collectExportableEntries,
   downloadJsonFile,
 } from "./exportBriefs";
+import { briefFeedToPdfInputs, downloadBriefPdfBundle } from "./pdf/downloadBriefPdf";
 
 type ApiRow = {
   index: number;
@@ -310,6 +312,20 @@ export default function BatchWorkspace() {
     );
   }, [briefFeed, rows, jobId, jobName]);
 
+  const onExportAllBriefsPdf = useCallback(() => {
+    const stored = readStoredBriefFeed();
+    const entries = collectExportableEntries(briefFeed, rows);
+    if (!entries.length) return;
+    const jid = jobId ?? stored?.jobId ?? "unknown";
+    const jname = jobName ?? stored?.filename ?? null;
+    void downloadBriefPdfBundle(
+      briefFeedToPdfInputs(entries),
+      bundleBriefsPdfFilename(jid, jname),
+    ).catch(() => {
+      /* network/font fetch failure */
+    });
+  }, [briefFeed, rows, jobId, jobName]);
+
   const exportableBriefEntries = useMemo(
     () => collectExportableEntries(briefFeed, rows),
     [briefFeed, rows],
@@ -472,10 +488,17 @@ export default function BatchWorkspace() {
             <div className="brief-feed-actions">
               <button
                 type="button"
+                className="btn btn-primary btn-compact"
+                onClick={onExportAllBriefsPdf}
+              >
+                Download all briefs (PDF)
+              </button>
+              <button
+                type="button"
                 className="btn btn-secondary btn-compact"
                 onClick={onExportAllBriefs}
               >
-                Download all briefs (JSON)
+                All briefs (JSON)
               </button>
             </div>
           </div>

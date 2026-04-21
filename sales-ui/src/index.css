@@ -1479,6 +1479,13 @@ table.batch td {
   margin-bottom: 0;
 }
 
+.brief-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .brief-card-kicker {
   font-family: var(--font-mono);
   font-size: 10px;

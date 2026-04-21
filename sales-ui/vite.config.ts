@@ -7,6 +7,9 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 
 export default defineConfig({
   plugins: [react()],
+  optimizeDeps: {
+    include: ["@react-pdf/renderer"],
+  },
   server: {
     port: 5173,
     fs: {
