@@ -152,8 +152,8 @@ class LookupFedrampMarketplaceProducts(
             return LookupFedrampMarketplaceProductsOutput(
                 search_phrase_query=inputs.search_phrase,
                 marketplace_resolution="catalog_fetch_error",
-                catalog_request_url=HttpUrl(catalog_url),  # type: ignore[arg-type]
-                marketplace_ui_url=HttpUrl(ui_url),  # type: ignore[arg-type]
+                catalog_request_url=HttpUrl(catalog_url),
+                marketplace_ui_url=HttpUrl(ui_url),
                 fetched_at=now,
                 error=robots_err or "robots_disallowed",
             )
@@ -169,8 +169,8 @@ class LookupFedrampMarketplaceProducts(
             return LookupFedrampMarketplaceProductsOutput(
                 search_phrase_query=inputs.search_phrase,
                 marketplace_resolution="catalog_fetch_error",
-                catalog_request_url=HttpUrl(catalog_url),  # type: ignore[arg-type]
-                marketplace_ui_url=HttpUrl(ui_url),  # type: ignore[arg-type]
+                catalog_request_url=HttpUrl(catalog_url),
+                marketplace_ui_url=HttpUrl(ui_url),
                 fetched_at=now,
                 error=f"transient: {e}",
             )
@@ -178,8 +178,8 @@ class LookupFedrampMarketplaceProducts(
             return LookupFedrampMarketplaceProductsOutput(
                 search_phrase_query=inputs.search_phrase,
                 marketplace_resolution="catalog_fetch_error",
-                catalog_request_url=HttpUrl(catalog_url),  # type: ignore[arg-type]
-                marketplace_ui_url=HttpUrl(ui_url),  # type: ignore[arg-type]
+                catalog_request_url=HttpUrl(catalog_url),
+                marketplace_ui_url=HttpUrl(ui_url),
                 fetched_at=now,
                 error=f"fetch_error: {type(e).__name__}: {e}",
             )
@@ -190,8 +190,8 @@ class LookupFedrampMarketplaceProducts(
             return LookupFedrampMarketplaceProductsOutput(
                 search_phrase_query=inputs.search_phrase,
                 marketplace_resolution="catalog_fetch_error",
-                catalog_request_url=HttpUrl(final_url),  # type: ignore[arg-type]
-                marketplace_ui_url=HttpUrl(ui_url),  # type: ignore[arg-type]
+                catalog_request_url=HttpUrl(final_url),
+                marketplace_ui_url=HttpUrl(ui_url),
                 fetched_at=now,
                 error=f"json_parse_error: {e}",
             )
@@ -202,8 +202,8 @@ class LookupFedrampMarketplaceProducts(
             return LookupFedrampMarketplaceProductsOutput(
                 search_phrase_query=inputs.search_phrase,
                 marketplace_resolution="catalog_fetch_error",
-                catalog_request_url=HttpUrl(final_url),  # type: ignore[arg-type]
-                marketplace_ui_url=HttpUrl(ui_url),  # type: ignore[arg-type]
+                catalog_request_url=HttpUrl(final_url),
+                marketplace_ui_url=HttpUrl(ui_url),
                 fetched_at=now,
                 error="catalog_shape_unexpected: missing data.Products",
             )
@@ -212,8 +212,8 @@ class LookupFedrampMarketplaceProducts(
             return LookupFedrampMarketplaceProductsOutput(
                 search_phrase_query=inputs.search_phrase,
                 marketplace_resolution="catalog_fetch_error",
-                catalog_request_url=HttpUrl(final_url),  # type: ignore[arg-type]
-                marketplace_ui_url=HttpUrl(ui_url),  # type: ignore[arg-type]
+                catalog_request_url=HttpUrl(final_url),
+                marketplace_ui_url=HttpUrl(ui_url),
                 fetched_at=now,
                 error="catalog_shape_unexpected: Products is not a list",
             )
@@ -246,7 +246,7 @@ class LookupFedrampMarketplaceProducts(
                     cloud_service_provider=csp[:500],
                     cloud_service_offering=cso[:500],
                     marketplace_status=status[:120],
-                    detail_url=HttpUrl(detail),  # type: ignore[arg-type]
+                    detail_url=HttpUrl(detail),
                     match_score=round(s, 3),
                 )
             )
@@ -259,8 +259,8 @@ class LookupFedrampMarketplaceProducts(
             search_phrase_query=inputs.search_phrase,
             marketplace_resolution=resolution,
             matches=matches,
-            catalog_request_url=HttpUrl(final_url),  # type: ignore[arg-type]
-            marketplace_ui_url=HttpUrl(ui_url),  # type: ignore[arg-type]
+            catalog_request_url=HttpUrl(final_url),
+            marketplace_ui_url=HttpUrl(ui_url),
             products_in_catalog=len(products),
             fetched_at=now,
             error=None,

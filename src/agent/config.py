@@ -31,46 +31,33 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # ── Kill switch (§7.5) ────────────────────────────────────────────
     enabled: bool = Field(default=True, alias="ARKENSTONE_AGENT_ENABLED")
 
-    # ── API keys ───────────────────────────────────────────────────────
     anthropic_api_key: SecretStr = Field(..., alias="ANTHROPIC_API_KEY")
     sam_gov_api_key: SecretStr = Field(
         default_factory=lambda: SecretStr(""),
         alias="SAM_GOV_API_KEY",
     )
-    # When true, an empty SAM key is allowed at startup; SAM lookups return
-    # not_found so the model can lean on web_search until a key is issued.
+    # Empty SAM key ok at startup; SAM tool returns not_found until configured.
     sam_gov_optional: bool = Field(default=False, alias="SAM_GOV_OPTIONAL")
 
-    # ── Model ────────────────────────────────────────────────────────
     model: str = "claude-opus-4-7"
-    # Tool-heavy turns (and adaptive thinking) need headroom; if this is too low
-    # the API returns stop_reason=max_tokens and the run halts.
+    # Headroom for tool-heavy turns; too low → stop_reason=max_tokens.
     max_tokens: int = 8192
     thinking_adaptive: bool = True
 
-    # ── Budgets (hard rails — §1 + §6) ───────────────────────────────
     max_tool_calls: int = 13
     max_cost_usd: float = 0.50
     max_wall_seconds: int = 90
-    # Per API request (usage.input_tokens). Web search + tool payloads often land
-    # in the 50–80k range; 40k was halting otherwise-successful runs.
+    # Per request input_tokens cap (web_search + tools often 50–80k).
     max_context_tokens: int = 128_000
     max_iterations: int = 20
 
-    # ── Wall clock: reserve + post-wall synthesis ─────────────────────
-    # When remaining wall < reserve, inject a one-time user nudge to finalize.
-    wall_reserve_seconds: int = 25
-    # In the last N seconds of wall budget, disable tools (force JSON soon).
-    # Set to 0 to disable.
-    wall_no_tools_buffer_seconds: int = 10
-    # After max_wall_seconds, one tools-off LLM call to turn trace into a Brief.
-    wall_synthesis_enabled: bool = True
+    wall_reserve_seconds: int = 25  # One-time nudge when wall almost exhausted.
+    wall_no_tools_buffer_seconds: int = 10  # Last N seconds: tools off; 0 disables.
+    wall_synthesis_enabled: bool = True  # One tools-off call after hard wall.
     wall_synthesis_max_tokens: int = 4096
 
-    # ── Observability ────────────────────────────────────────────────
     runs_dir: Path = Field(default=Path("./runs"), alias="AGENT_RUNS_DIR")
     log_level: str = "INFO"
 
@@ -79,10 +66,8 @@ class Settings(BaseSettings):
         """Back-compat alias; everything lives under the run dir."""
         return self.runs_dir
 
-    # ── Profile ──────────────────────────────────────────────────────
     profile: Profile = Profile.STANDARD
 
-    # ── Tool posture (§4.1) ──────────────────────────────────────────
     user_agent: str = (
         "ArkenstoneProspectResearchBot/1.0 (+https://arkenstone.defense/bots)"
     )
@@ -110,11 +95,7 @@ def _validate_startup(settings: Settings) -> None:
             "ANTHROPIC_API_KEY is missing or malformed (expected 'sk-ant-...')."
         )
 
-    # Guard against stale/typo'd model slugs. The 19:55 UTC batch failed every
-    # run with `model: claude-sonnet-4-7` (doesn't exist); fail loud at startup
-    # instead of burning an iteration per row. PRICING_PER_MTOK is also the
-    # cost-budget source-of-truth, so keeping them aligned avoids silent fallback
-    # to Opus pricing for an unknown model.
+    # Unknown model slugs fail here (also keeps cost math aligned with PRICING_PER_MTOK).
     from agent.observability.cost import PRICING_PER_MTOK  # local import: avoid cycle
 
     if settings.model not in PRICING_PER_MTOK:
@@ -128,8 +109,6 @@ def _validate_startup(settings: Settings) -> None:
 
     sk = settings.sam_gov_api_key.get_secret_value().strip()
     if settings.sam_gov_optional:
-        # Optional SAM: empty is fine. Short values (e.g. `...` from .env.example)
-        # are treated as unset so copy-paste setups do not fail startup.
         if len(sk) >= _SAM_KEY_MIN_LEN and not _SAM_KEY_RE.match(sk):
             raise ConfigError(
                 "SAM_GOV_API_KEY is set but malformed. Request one at "
@@ -143,16 +122,13 @@ def _validate_startup(settings: Settings) -> None:
         )
 
 
-# Normalize the kill switch to "true"/"false" so pydantic parses it predictably.
 _env_enabled = os.environ.get("ARKENSTONE_AGENT_ENABLED")
 if _env_enabled is not None and _env_enabled.strip().lower() in {"0", "false", "no"}:
     os.environ["ARKENSTONE_AGENT_ENABLED"] = "false"
 else:
     os.environ.setdefault("ARKENSTONE_AGENT_ENABLED", "true")
 
-# Short-circuit when the user is running `agent --help` or similar:
-# only enforce startup validation when we actually need to run the agent.
-# `_AGENT_SKIP_STARTUP_CHECKS=1` lets tooling import `config` without keys.
+# `_AGENT_SKIP_STARTUP_CHECKS=1` skips validation (imports without keys, --help).
 if os.environ.get("_AGENT_SKIP_STARTUP_CHECKS") == "1":
     settings = Settings.model_construct(
         enabled=True,

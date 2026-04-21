@@ -61,7 +61,6 @@ class Tool(ABC, Generic[TInput, TOutput]):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
-        # Skip abstract intermediate bases
         if inspect.isabstract(cls):
             return
         cls._validate_contract()
@@ -122,8 +121,6 @@ class Tool(ABC, Generic[TInput, TOutput]):
                     f"{cls.__name__}.examples[{i}] does not match Input schema: {e}"
                 ) from e
 
-    # ── Execution ────────────────────────────────────────────────────
-
     @abstractmethod
     async def run(self, inputs: TInput) -> TOutput:
         """The actual tool logic. Implement this."""
@@ -155,7 +152,6 @@ class Tool(ABC, Generic[TInput, TOutput]):
         try:
             validated = self.Output.model_validate(result.model_dump())
         except ValidationError as e:
-            # This is a bug in the tool, not in the LLM — surface clearly.
             return {
                 "error": "output_schema_violation",
                 "detail": e.errors(include_url=False),
@@ -163,14 +159,10 @@ class Tool(ABC, Generic[TInput, TOutput]):
 
         return validated.model_dump(mode="json")
 
-    # ── Schema export for Anthropic API ──────────────────────────────
-
     @classmethod
     def to_anthropic_schema(cls) -> dict[str, Any]:
         """Convert to the shape expected by Anthropic's tool-use API."""
         json_schema = cls.Input.model_json_schema()
-        # Strip Pydantic-specific $defs if they'd confuse the LLM; here we
-        # keep them because Claude handles nested refs fine.
         return {
             "name": cls.name,
             "description": cls.description,

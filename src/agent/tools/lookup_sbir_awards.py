@@ -8,7 +8,7 @@ the single cleanest Track 1 discriminator for an early-stage company).
 from __future__ import annotations
 
 import os
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any, ClassVar, Literal
 
 import httpx
@@ -19,10 +19,7 @@ from agent.tools._base import Tool
 
 _BASE_URL = "https://api.www.sbir.gov/public/api/awards"
 
-# SBIR.gov public API caps us at 10 requests / 10 minutes (verified via the
-# 403 payload seen in runs/secondfront-com/2026-04-20T21-20-42Z). Without a
-# client-side bucket, a batch of prospect runs burns the quota in seconds
-# and every subsequent call 403s. 0.9 req/min ≈ 9/10 min, leaving headroom.
+# SBIR.gov ~10 req/10min; client bucket ~0.9/min avoids quota 403s in batch runs.
 _sbir_bucket = TokenBucket(name="sbir.gov", rate_per_minute=0.9, capacity=1)
 
 
@@ -123,7 +120,7 @@ class LookupSbirAwards(Tool[LookupSbirAwardsInput, LookupSbirAwardsOutput]):
     side_effects: ClassVar[list[str]] = ["outbound HTTPS to api.www.sbir.gov"]
 
     async def run(self, inputs: LookupSbirAwardsInput) -> LookupSbirAwardsOutput:
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         end_year = date.today().year
         start_year = end_year - inputs.lookback_years
 
@@ -151,10 +148,7 @@ class LookupSbirAwards(Tool[LookupSbirAwardsInput, LookupSbirAwardsOutput]):
                 error=f"transient: {e}",
             )
         except RuntimeError as e:
-            # SBIR returns 403 with a rate-limit body when we burn the
-            # 10-requests-per-10-minutes quota. Surface it as a clean
-            # `rate_limited` result instead of a tool exception so the
-            # agent does not retry and can move on to web_search.
+            # Quota 403 → rate_limited payload (no blind retries).
             msg = str(e)
             if "403" in msg and "rate limit" in msg.lower():
                 return LookupSbirAwardsOutput(
@@ -254,7 +248,6 @@ def _parse_sbir(r: dict[str, Any]) -> SbirAward | None:
 
 
 def _source_url_for(r: dict[str, Any]) -> str:
-    # SBIR.gov exposes permalinks keyed on award number.
     url = r.get("award_link") or r.get("url")
     if url:
         return str(url)
@@ -283,10 +276,6 @@ def _parse_date(value: Any) -> date | None:
 
 
 async def _sbir_get(params: dict[str, Any]) -> Any:
-    # Wait (up to 30 s) for a bucket token so we stay under the SBIR quota.
-    # If the caller has already burned the quota elsewhere, the wait still
-    # ends after 30 s and we let the upstream 403 handler surface a clean
-    # rate_limited error to the agent.
     await _sbir_bucket.acquire(timeout=30.0)
 
     async def _do() -> Any:

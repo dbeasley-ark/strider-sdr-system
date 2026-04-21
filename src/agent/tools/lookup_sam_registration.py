@@ -13,7 +13,6 @@ decision. Contact enrichment is out of scope for v1.
 
 from __future__ import annotations
 
-import asyncio
 import os
 from datetime import date, datetime
 from typing import Any, ClassVar, Literal
@@ -36,18 +35,10 @@ from agent.reliability import (
 from agent.tools._base import Tool
 
 _BASE_URL = "https://api.sam.gov/entity-information/v3/entities"
-_FUZZY_HIGH = 0.92  # spec §4.4 — conservative threshold
+_FUZZY_HIGH = 0.92  # §4.4 fuzzy threshold
 
-# Shared, process-global rate limiter: SAM's 10/min is a hard ceiling.
 _sam_bucket = TokenBucket(name="sam.gov", rate_per_minute=9.0, capacity=1)
-
-# Process-global identity cache; one per run is achieved by constructing
-# a new cache when a new run starts (see agent.py). In practice a single
-# CLI invocation runs one agent; we don't need a stricter scope.
 _identity_cache = IdentityCache()
-
-
-# ── Schemas ──────────────────────────────────────────────────────────
 
 
 class LookupSamRegistrationInput(BaseModel):
@@ -103,9 +94,6 @@ class LookupSamRegistrationOutput(BaseModel):
     records: list[SamEntityRecord] = Field(default_factory=list)
     fetched_at: datetime
     error: str | None = None
-
-
-# ── Tool ─────────────────────────────────────────────────────────────
 
 
 class LookupSamRegistration(Tool[LookupSamRegistrationInput, LookupSamRegistrationOutput]):
@@ -344,7 +332,6 @@ async def _sam_get(params: dict[str, Any]) -> dict[str, Any]:
         if 500 <= resp.status_code < 600:
             raise TransientError(f"SAM {resp.status_code}")
         if resp.status_code >= 400:
-            # 4xx — our request is wrong, don't retry
             raise RuntimeError(f"SAM {resp.status_code}: {resp.text[:200]}")
         return resp.json()
 
@@ -353,9 +340,6 @@ async def _sam_get(params: dict[str, Any]) -> dict[str, Any]:
         seconds=45.0,
         name="lookup_sam_registration",
     )
-
-
-# ── Test hook ───────────────────────────────────────────────────────
 
 
 def _use_test_base_url() -> None:

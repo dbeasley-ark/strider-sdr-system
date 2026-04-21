@@ -37,8 +37,6 @@ class ToolRegistry:
     def __len__(self) -> int:
         return len(self._tools)
 
-    # ── Export for the API ───────────────────────────────────────────
-
     def to_anthropic_schemas(self) -> list[dict[str, Any]]:
         """Inline mode: return all tool schemas."""
         return [type(t).to_anthropic_schema() for t in self._tools.values()]

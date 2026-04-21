@@ -69,8 +69,6 @@ class CircuitBreaker:
                 self._record_success()
             return result
 
-    # ── State transitions ───────────────────────────────────────────
-
     def _maybe_transition_to_half_open(self) -> None:
         if self._state is BreakerState.OPEN and self._opened_at is not None:
             if time.monotonic() - self._opened_at >= self.reset_timeout_s:

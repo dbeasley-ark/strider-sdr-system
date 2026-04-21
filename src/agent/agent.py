@@ -89,16 +89,10 @@ class AgentResult:
     cost_summary: dict[str, Any] = field(default_factory=dict)
 
 
-# ── Native web_search declaration ───────────────────────────────────
-
 WEB_SEARCH_TOOL: dict[str, Any] = {
     "type": "web_search_20260209",
     "name": "web_search",
-    # §4.2 per-run query budget. Lowered from 6 to 4 — web_search results
-    # are the single biggest source of context bloat (see tanium iter4
-    # jumping from 36k→164k input tokens on one round of searches). The
-    # high_confidence horizon3 run succeeded with just 2 web_search calls,
-    # so 4 leaves comfortable headroom.
+    # §4.2: web_search cap (4) — largest driver of input-token growth per turn.
     "max_uses": 4,
 }
 
@@ -135,8 +129,6 @@ class Agent:
         self.tool_timeout_s = tool_timeout_s
         self._breakers: dict[str, CircuitBreaker] = {}
 
-    # ── Public API ───────────────────────────────────────────────────
-
     async def research(
         self,
         company: str,
@@ -161,7 +153,6 @@ class Agent:
 
         cost = CostTracker(model=self.model, max_usd=settings.max_cost_usd)
 
-        # URL allowlist seeded from caller input.
         allowlist = UrlAllowlist()
         allowlist.seed(company)
         if domain:
@@ -211,17 +202,8 @@ class Agent:
             ]
             iterations = 0
             tool_calls_used = 0
-            # At most one "fix your citations" round trip before we accept
-            # the downgraded brief. Does not count toward tool budget.
-            repair_attempts = 0
-            # Anthropic's server tools (web_search + implicit code execution)
-            # return a `container` referencing a short-lived sandbox. Follow-up
-            # requests that still declare tools must thread the same
-            # `container_id` when the transcript has pending server-tool state;
-            # omitting it can 400. Conversely, requests with **no** tools must
-            # not send `container` — the API rejects it unless the code
-            # execution tool is enabled on that same request (e.g. post-wall
-            # synthesis with allow_tools=False).
+            repair_attempts = 0  # One citation-repair LLM turn; not charged to tool budget.
+            # Thread container_id on tool-enabled turns when required; omit when allow_tools=False.
             container_id: str | None = None
             wall_synthesis_attempted = False
             reserve_nudge_sent = False
@@ -231,7 +213,6 @@ class Agent:
                 while True:
                     iterations += 1
 
-                    # ── Budget rails ────────────────────────────
                     wall = time.monotonic() - started
 
                     if wall > settings.max_wall_seconds:
@@ -511,7 +492,6 @@ class Agent:
                             run_dir=run_dir,
                         )
 
-                    # ── One-time reserve nudge (finalize before hard wall) ──
                     if (
                         settings.wall_reserve_seconds > 0
                         and wall
@@ -539,16 +519,12 @@ class Agent:
                     ):
                         allow_tools = False
 
-                    # ── LLM call ────────────────────────────────
                     trace.event("llm.request", iteration=iterations, msg_count=len(messages))
                     response = await self._call_llm(
                         messages,
                         allow_tools=allow_tools,
                         container_id=container_id,
                     )
-                    # Capture/refresh the sandbox container id for server
-                    # tools; thread it on subsequent tool-enabled turns only
-                    # (see _call_llm: no `container` when allow_tools=False).
                     new_container = getattr(response, "container", None)
                     new_container_id = getattr(new_container, "id", None)
                     if new_container_id:
@@ -679,14 +655,7 @@ class Agent:
                                 run_dir=run_dir,
                             )
 
-                        # Repair loop — give the model one chance to swap
-                        # out untraced citations before we downgrade.
-                        # Historically, runs like forterra and secondfront
-                        # went low_confidence purely because the model
-                        # invented URLs; letting it retry with an explicit
-                        # list of trace-backed URLs recovers the verdict
-                        # most of the time, for the cost of one extra LLM
-                        # round trip (no extra tool calls).
+                        # One repair turn when hooks cite URLs not from trace (no extra tool calls).
                         hook_drops_only = (
                             report.dropped_hooks
                             and not any(
@@ -726,7 +695,6 @@ class Agent:
                             ],
                         )
 
-                        # Backfill numeric fields that the model can't know.
                         filtered = filtered.model_copy(
                             update={
                                 "tool_calls_used": tool_calls_used,
@@ -870,13 +838,7 @@ class Agent:
                     run_dir=run_dir,
                 )
             except BaseException as e:
-                # Catch BaseException (KeyboardInterrupt, CancelledError,
-                # SystemExit) so we always leave a brief.json on disk.
-                # Before this, the sales UI saw "Agent produced no stdout"
-                # when a batch was cancelled mid-row — see
-                # runs/cape-co/2026-04-20T21-22-28Z/trace.jsonl, which ends
-                # in agent.end{status:"error", error_type:"SystemExit"}
-                # but never wrote a brief.
+                # Still emit brief.json on cancel/signal; then re-raise.
                 trace.event(
                     "halt.cancelled",
                     error=str(e),
@@ -900,8 +862,6 @@ class Agent:
                 )
                 raise
 
-    # ── Internals ───────────────────────────────────────────────────
-
     async def _call_llm(
         self,
         messages: list[dict[str, Any]],
@@ -915,13 +875,7 @@ class Agent:
             [*custom_schemas, WEB_SEARCH_TOOL] if allow_tools else []
         )
 
-        # Prompt caching — system prompt + tool schemas are identical across
-        # every iteration of a run (~12k tokens), so mark the tail of the
-        # static prefix as an ephemeral cache breakpoint. Subsequent calls
-        # within the 5-minute window bill cache-read prices (~10%) instead
-        # of fresh input. Traces prior to this change show `cache_read_tokens: 0`
-        # on every llm.response — e.g. tanium iter1→iter4 grew 11k→164k
-        # input tokens and rebilled the prefix every step.
+        # Ephemeral cache_control on static system+tools prefix (cache read vs full input).
         system_blocks: list[dict[str, Any]] = [
             {
                 "type": "text",
@@ -946,9 +900,7 @@ class Agent:
             kwargs["tools"] = cached_tools
         if settings.thinking_adaptive:
             kwargs["thinking"] = {"type": "adaptive"}
-        # Anthropic: `container` is only valid alongside the code execution
-        # tool path; our tools-off phases (wall buffer, post-wall synthesis)
-        # must not pass it or the API returns invalid_request_error.
+        # `container` only with tools on (otherwise invalid_request_error).
         if container_id and allow_tools:
             kwargs["container"] = container_id
 
@@ -990,7 +942,6 @@ class Agent:
             trace.event("tool.call", tool=tool_name, tool_id=tool_id, input=tool_input)
 
             if tool_name == "web_search":
-                # Server-side — we should never be asked to execute it client-side.
                 return _as_tool_result(
                     tool_id,
                     {"error": "web_search is an Anthropic server tool; no client handler"},
@@ -1153,8 +1104,6 @@ class Agent:
                 allowlist=allowlist.snapshot(),
             )
 
-    # ── Finalizers ──────────────────────────────────────────────────
-
     def _finalize_insufficient(
         self,
         *,
@@ -1200,9 +1149,6 @@ class Agent:
             run_dir=str(run_dir),
             cost_summary=cost.summary(),
         )
-
-
-# ── Module-level helpers ────────────────────────────────────────────
 
 
 def _as_tool_result(tool_id: str, payload: Any, *, is_error: bool) -> dict[str, Any]:
@@ -1346,15 +1292,7 @@ def _repair_user_message(
     citation_urls: set[str],
     seed_hosts: set[str],
 ) -> str:
-    """Ask the model to re-emit the brief with trace-backed citations.
-
-    We do this once per run instead of silently downgrading the verdict,
-    because pre-repair analysis of runs/forterra-com and runs/secondfront-com
-    showed the model was cherry-picking URLs from training data that a
-    single retry could have fixed (e.g. substituting a secondfront.com URL
-    for a prnewswire.com one, or removing a phantom usaspending.gov link).
-    """
-    # Cap the allowed-URL list so we don't balloon context on repair.
+    """Ask the model once to re-emit the brief with trace-backed hook URLs."""
     allowed_sorted = sorted(fetched_urls | citation_urls)
     allowed_preview = allowed_sorted[:30]
     seed_list = ", ".join(sorted(seed_hosts)) or "(none)"
@@ -1417,9 +1355,6 @@ def _progress_for_tool(
         inj = result.get("injection_signals") or []
         note = f" [injection:{','.join(inj)}]" if inj else ""
         emit(f"fetched: {u}{note}")
-
-
-# ── Convenience wrappers ────────────────────────────────────────────
 
 
 async def research(

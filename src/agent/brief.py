@@ -221,13 +221,11 @@ class Brief(BaseModel):
     SDR in ≤60 seconds (per §1 goal).
     """
 
-    # ── Meta ─────────────────────────────────────────────────────────
     schema_version: Literal["1.0"] = "1.0"
     run_id: str
     generated_at: datetime
     confidentiality: Literal["internal_only"] = "internal_only"
 
-    # ── Identity ─────────────────────────────────────────────────────
     company_name_queried: str
     company_name_canonical: str | None = Field(
         default=None,
@@ -236,7 +234,6 @@ class Brief(BaseModel):
     domain: str | None = None
     uei: str | None = Field(default=None, pattern=r"^[A-Z0-9]{12}$")
 
-    # ── Verdict ──────────────────────────────────────────────────────
     track: Track
     verdict: Verdict
     why_not_confident: str | None = Field(
@@ -254,25 +251,21 @@ class Brief(BaseModel):
         description="2–4 sentence defense of the Track call, citing signals.",
     )
 
-    # ── Decision content ─────────────────────────────────────────────
     revenue_estimate: RevenueEstimate
     target_roles: list[TargetRole] = Field(..., min_length=0, max_length=5)
     hooks: list[PersonalizationHook] = Field(..., min_length=0, max_length=8)
 
-    # ── Sales conversation prep (structured) ─────────────────────────
     sales_conversation_prep: SalesConversationPrep = Field(
         default_factory=default_sales_conversation_prep,
         description="FedRAMP check, PEO, funding, mission, top awards — unknown-safe.",
     )
 
-    # ── Provenance ───────────────────────────────────────────────────
     sources_used: list[SourceSummary] = Field(default_factory=list)
     tool_calls_used: int = Field(ge=0)
     tool_calls_budget: int = Field(ge=0)
     wall_seconds: float = Field(ge=0)
     cost_usd: float = Field(ge=0)
 
-    # ── Halt reason (when agent bailed) ───────────────────────────────
     halt_reason: (
         Literal[
             "tool_budget_exhausted",

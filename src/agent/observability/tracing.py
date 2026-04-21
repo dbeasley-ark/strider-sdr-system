@@ -68,9 +68,6 @@ def _configure_logging() -> None:
 _configure_logging()
 logger: BoundLogger = structlog.get_logger("agent")
 
-
-# ── Secret scrubbing ─────────────────────────────────────────────────
-
 _SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("anthropic_api_key", re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")),
     ("sam_api_key_in_url", re.compile(r"(?i)(api_key=)[A-Za-z0-9\-]{20,}")),
@@ -96,10 +93,7 @@ def scrub(value: Any) -> Any:
     return value
 
 
-# ── Hash-chained trace ──────────────────────────────────────────────
-
-
-_GENESIS_HASH = "0" * 64  # prior-hash for the very first line of a new trace file
+_GENESIS_HASH = "0" * 64  # First line in a new trace chains from this sentinel.
 
 
 class Trace:
@@ -162,7 +156,6 @@ class Trace:
         if self._file is not None:
             self._file.write(serialized + "\n")
             self._file.flush()
-        # Next line's prev_hash covers the exact bytes persisted.
         self._prev_hash = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
         logger.info(event_type, **fields, run_id=self.run_id)
@@ -174,9 +167,6 @@ class Trace:
     @property
     def path(self) -> Path:
         return self._path
-
-
-# ── Run directory helpers ────────────────────────────────────────────
 
 
 _SLUG_PATTERN = re.compile(r"[^a-z0-9]+")
@@ -195,7 +185,6 @@ def slugify(text: str) -> str:
             break
     if text.startswith("www."):
         text = text[len("www."):]
-    # Drop path + query.
     text = text.split("/", 1)[0].split("?", 1)[0]
     return _SLUG_PATTERN.sub("-", text).strip("-") or "unknown"
 
@@ -207,9 +196,6 @@ def new_run_dir(company: str, *, base: Path | None = None) -> Path:
     out = root / slugify(company) / ts
     out.mkdir(parents=True, exist_ok=True)
     return out
-
-
-# ── Integrity verification ──────────────────────────────────────────
 
 
 def verify_chain(trace_path: Path) -> tuple[bool, str | None]:

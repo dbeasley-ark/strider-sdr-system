@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any, ClassVar, Literal
 
 import httpx
@@ -83,9 +83,8 @@ class LookupUSAspendingAwardsOutput(BaseModel):
     error: str | None = None
 
 
-# Code-to-category translator for USAspending's POST body.
 _AWARD_CODES = {
-    "contract": ["A", "B", "C", "D"],      # IDC/Purchase/Delivery/Definitive
+    "contract": ["A", "B", "C", "D"],
     "idv": ["IDV_A", "IDV_B", "IDV_C"],
 }
 
@@ -123,13 +122,11 @@ class LookupUSAspendingAwards(
     async def run(
         self, inputs: LookupUSAspendingAwardsInput
     ) -> LookupUSAspendingAwardsOutput:
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         end = date.today()
         start = date(end.year - inputs.lookback_years, end.month, min(end.day, 28))
 
-        # USAspending rejects award_type_codes that mix groups
-        # (422 "must only contain types from one group"). Fan out one POST
-        # per requested group and merge; dedupe by Award ID on the result.
+        # API 422 if award_type_codes mix groups — one POST per group, merge results.
         requested_groups = list(dict.fromkeys(inputs.award_types))  # preserve order, unique
         if not requested_groups:
             requested_groups = ["contract", "idv"]
@@ -177,8 +174,6 @@ class LookupUSAspendingAwards(
             )
 
         if not merged_rows and errors:
-            # All groups failed — surface the combined error so the agent can
-            # reason about whether to retry, rather than claiming "no awards".
             return LookupUSAspendingAwardsOutput(
                 recipient_name_query=inputs.recipient_name,
                 identity_resolution=_resolution(inputs),

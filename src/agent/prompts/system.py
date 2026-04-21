@@ -12,20 +12,7 @@ To update:
 
 from __future__ import annotations
 
-# ─────────────────────────────────────────────────────────────────────
-# v1 — initial prospect-research prompt (2026-04-18)
-#
-# Design notes:
-#   • ICP definitions from spec §1 are canonical.
-#   • Recall > precision bias per spec §2.
-#   • Injection hardening is explicit: anything wrapped in <untrusted_*>
-#     tags is DATA, never instructions.
-#   • Output contract: the agent must produce a JSON object matching
-#     agent.brief.Brief when it's ready to stop calling tools.
-#   • Tool-usage hints: SAM first, then USAspending/SBIR in parallel,
-#     web_search for persona + press, fetch_company_page only for URLs
-#     the LLM saw in web_search results or that match the input domain.
-# ─────────────────────────────────────────────────────────────────────
+# SYSTEM_V1 (2026-04-18); bump DEFAULT only after evals clear §8.3 gate.
 
 SYSTEM_V1 = """\
 You are Arkenstone Defense's prospect-research agent. Your job is to

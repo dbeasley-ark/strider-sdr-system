@@ -13,8 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-# Prices in USD per million tokens.
-# Source: Anthropic pricing page (verified 2026-04-18).
+# USD per million tokens (Anthropic pricing page, verified 2026-04-18).
 PRICING_PER_MTOK: dict[str, dict[str, float]] = {
     "claude-opus-4-7": {
         "input": 5.00,
@@ -70,8 +69,7 @@ class CostTracker:
     def total_usd(self) -> float:
         p = PRICING_PER_MTOK.get(self.model)
         if p is None:
-            # Unknown model — fall back to Opus pricing to be safe (over-estimates).
-            p = PRICING_PER_MTOK["claude-opus-4-7"]
+            p = PRICING_PER_MTOK["claude-opus-4-7"]  # Unknown slug: over-estimate with Opus.
         return (
             self.input_tokens * p["input"]
             + self.output_tokens * p["output"]

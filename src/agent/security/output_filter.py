@@ -85,17 +85,13 @@ def apply_filter(
     report = FilterReport()
     seed_hosts = seed_hosts or set()
 
-    # ── 1. Compliance scan on everything the SDR will see ──────────
     compliance_surface = _serialize_for_scan(brief)
     hits = scan(compliance_surface)
     if has_hard_stop(hits):
-        # This is the §7.3 classified-markings hard stop. Do NOT return
-        # a brief — the caller must abort.
         raise ComplianceHardStop(hits)
 
     report.compliance_hits = hits
 
-    # ── 2. Citation validation + hook filtering ────────────────────
     allowed = {_normalize_url(u) for u in (fetched_urls | citation_urls)}
     kept_hooks: list[PersonalizationHook] = []
     for hook in brief.hooks:
@@ -105,7 +101,6 @@ def apply_filter(
         else:
             report.dropped_hooks.append((url, "url_not_in_trace"))
 
-    # ── 3. Downgrade verdict when the filter significantly altered the brief ──
     downgraded_for_compliance = any(h.severity is Severity.WARN for h in hits)
     downgraded_for_hooks = (
         len(kept_hooks) == 0 and len(brief.hooks) > 0

@@ -32,9 +32,6 @@ from agent.config import settings
 from agent.reliability import TransientError, with_retry, with_timeout
 from agent.tools._base import Tool
 
-
-# ── Injection-pattern labels ────────────────────────────────────────
-# We flag but do not block. These labels are what the LLM sees.
 _INJECTION_SIGNATURES: list[tuple[str, re.Pattern[str]]] = [
     ("instruction_override", re.compile(
         r"ignore (all |any |your )?(previous |prior )?(instructions|prompts|system\s*prompt)",
@@ -132,7 +129,6 @@ class FetchCompanyPage(Tool[FetchCompanyPageInput, FetchCompanyPageOutput]):
         now = datetime.utcnow()
         url = str(inputs.url)
 
-        # ── robots.txt ────────────────────────────────────────────
         allowed, robots_err = await _robots_allows(url, user_agent=settings.user_agent)
         if not allowed:
             return FetchCompanyPageOutput(
@@ -143,7 +139,6 @@ class FetchCompanyPage(Tool[FetchCompanyPageInput, FetchCompanyPageOutput]):
                 error=robots_err or "robots_disallowed",
             )
 
-        # ── HTTP fetch ────────────────────────────────────────────
         try:
             resp, final_url = await _bounded_get(
                 url,
@@ -172,7 +167,6 @@ class FetchCompanyPage(Tool[FetchCompanyPageInput, FetchCompanyPageOutput]):
         content_type = (resp.headers.get("content-type") or "").lower()
         body_bytes = resp.content
 
-        # PDFs and binaries: explicit v1 skip (§4.1).
         if "application/pdf" in content_type:
             return FetchCompanyPageOutput(
                 url=inputs.url,
@@ -198,7 +192,6 @@ class FetchCompanyPage(Tool[FetchCompanyPageInput, FetchCompanyPageOutput]):
                 error=f"unsupported_content_type:{content_type}",
             )
 
-        # ── Extraction ────────────────────────────────────────────
         html = body_bytes.decode(resp.encoding or "utf-8", errors="replace")
         content_text, title = _extract_text(html)
         truncated = len(body_bytes) >= inputs.max_bytes
@@ -206,10 +199,8 @@ class FetchCompanyPage(Tool[FetchCompanyPageInput, FetchCompanyPageOutput]):
         # JS-heavy heuristic: a lot of HTML, very little text.
         is_js_heavy = len(html) > 50_000 and len(content_text) < 200
 
-        # ── Injection scan (flag, don't block) ────────────────────
         signals = _scan_injection(content_text)
 
-        # ── Wrap in <untrusted_prospect_content> delimiters ───────
         wrapped = (
             f"<untrusted_prospect_content source_url={final_url}>"
             f"\n{content_text}\n"
@@ -228,9 +219,6 @@ class FetchCompanyPage(Tool[FetchCompanyPageInput, FetchCompanyPageOutput]):
             truncated=truncated,
             injection_signals=signals,
         )
-
-
-# ── Internals ────────────────────────────────────────────────────────
 
 
 _ROBOTS_CACHE: dict[str, tuple[float, urllib.robotparser.RobotFileParser | None]] = {}

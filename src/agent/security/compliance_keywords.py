@@ -1,34 +1,4 @@
-"""Compliance keyword lists for the §7.3 output filter.
-
-Four classes of markers, escalating in severity:
-
-    WARN       → ITAR/EAR nomenclature. Flag + downgrade verdict to
-                 low_confidence; strip offending span from hooks.
-    WARN       → CUI markings. Flag + hard-remove span; log incident.
-    WARN       → Export control markings (EAR99, ECCN patterns).
-    HARD_STOP  → Classified markings (CONFIDENTIAL / SECRET / TOP SECRET /
-                 NOFORN / SCI / SAP). Abort run; no brief returned;
-                 SECURITY_INCIDENT trace line written; exit nonzero.
-
-────────────────────────────────────────────────────────────────────────
-IMPORTANT (§7.3.C): legal review is REQUIRED before v1 ships.
-
-This initial list is a developer first-pass, not compliance counsel's
-final word. Every pattern below has a "provenance" comment indicating
-where it came from. Compliance counsel should:
-
-  1. Confirm or remove each entry.
-  2. Add any Arkenstone-specific contractual obligations (customer NDAs,
-     ITAR/DDTC registration obligations, etc.).
-  3. Sign off on the severity mapping (WARN vs HARD_STOP).
-
-Until that sign-off, this file's output is informational at the WARN
-tier and advisory at the HARD_STOP tier — the runtime still enforces
-HARD_STOP, but we document the open review status.
-
-Tracking: §7.7 leadership blocker 7.3.C.
-────────────────────────────────────────────────────────────────────────
-"""
+"""§7.3 output-filter regexes (WARN vs HARD_STOP). Legal review §7.3.C; provenance on each Pattern."""
 
 from __future__ import annotations
 
@@ -58,19 +28,9 @@ class Pattern:
     provenance: str
 
 
-# ─────────────────────────────────────────────────────────────────────
-# CLASSIFIED — HARD STOP
-# ─────────────────────────────────────────────────────────────────────
-# Provenance: ISOO CUI Registry + DoDM 5200.01 Vol 2, Appendix A.
-# We match markings with strict word-boundary context to avoid tripping
-# on regular English ("the classified documents were…") — we want to
-# match *portion markings* and stamped-marking styles.
-# ─────────────────────────────────────────────────────────────────────
+# Classified (HARD_STOP) — DoDM 5200.01 / ODNI; uppercase banners and formal portion marks.
 
 _CLASSIFIED_PATTERNS: list[Pattern] = [
-    # Banner markings are ALWAYS uppercase stamps — the regex is case-
-    # sensitive to avoid false-positives on ordinary lowercase English
-    # ("their secret sauce"; "the classified documents were…").
     Pattern(
         marker=Marker.CLASSIFIED,
         severity=Severity.HARD_STOP,
@@ -85,9 +45,6 @@ _CLASSIFIED_PATTERNS: list[Pattern] = [
         marker=Marker.CLASSIFIED,
         severity=Severity.HARD_STOP,
         label="secret_banner",
-        # Require either a line-start/newline, or a slash-compartment suffix
-        # to qualify as a banner. This avoids matching mid-sentence lowercase
-        # "secret" while still catching "SECRET//NOFORN" in any position.
         regex=re.compile(
             r"(?:^|\n)\s*SECRET(?://[A-Z0-9/\s,-]+)?(?=\s|$|\n|//)"
             r"|SECRET//[A-Z0-9/\s,-]+",
@@ -99,7 +56,6 @@ _CLASSIFIED_PATTERNS: list[Pattern] = [
         marker=Marker.CLASSIFIED,
         severity=Severity.HARD_STOP,
         label="confidential_banner",
-        # Narrow: require a formal banner / portion form.
         regex=re.compile(
             r"(?:^|\n)\s*CONFIDENTIAL(?://[A-Z0-9/\s,-]+)?(?=\s|$|\n)"
             r"|\(\s*CONFIDENTIAL(?://[A-Z0-9/\s,-]+)?\s*\)"
@@ -112,19 +68,9 @@ _CLASSIFIED_PATTERNS: list[Pattern] = [
         marker=Marker.CLASSIFIED,
         severity=Severity.HARD_STOP,
         label="portion_marking",
-        # Portion markings: (U), (C), (S), (TS), (S//NF), etc.
-        # Conservative form to avoid false-positives on "(C) Copyright",
-        # "(U.S.-based)", trademark/registration text, and single-letter
-        # list markers. Triggers when one of:
-        #   * The marker carries a classification compartment (e.g., "(S//NF)")
-        #     — these are unambiguous classified portion markings.
-        #   * The marker appears at the start of a line (DoD banner style).
-        # Bare "(C)" or "(U)" anywhere else is NOT treated as classified;
-        # we avoid mis-flagging ordinary legal / copyright text.
         regex=re.compile(
             r"\(\s*(?:TS|S|C|U)\s*//[A-Z0-9/\s,-]+\)"
             r"|(?:^|\n)\s*\(\s*(?:TS|S|C|U)\s*\)"
-            # Must not be a copyright notice — "(C) Copyright", "(C) 2026".
             r"(?!\s+(?:Copyright|©|\d{4}\b))",
             re.MULTILINE,
         ),
@@ -145,7 +91,6 @@ _CLASSIFIED_PATTERNS: list[Pattern] = [
         marker=Marker.CLASSIFIED,
         severity=Severity.HARD_STOP,
         label="sci_markings",
-        # SCI compartment markings — bare token is ambiguous, require banner context.
         regex=re.compile(r"(?://|^|\n)\s*(?:SI|TK|HCS|KLONDIKE|GAMMA)\b"),
         provenance="ODNI — SCI compartment markings (contextualized)",
     ),
@@ -159,11 +104,7 @@ _CLASSIFIED_PATTERNS: list[Pattern] = [
 ]
 
 
-# ─────────────────────────────────────────────────────────────────────
-# CUI — WARN (strip span, downgrade confidence)
-# ─────────────────────────────────────────────────────────────────────
-# Provenance: 32 CFR Part 2002; ISOO CUI Registry.
-# ─────────────────────────────────────────────────────────────────────
+# CUI (WARN) — 32 CFR 2002 / ISOO registry.
 
 _CUI_PATTERNS: list[Pattern] = [
     Pattern(
@@ -206,11 +147,7 @@ _CUI_PATTERNS: list[Pattern] = [
 ]
 
 
-# ─────────────────────────────────────────────────────────────────────
-# EXPORT CONTROL — WARN
-# ─────────────────────────────────────────────────────────────────────
-# Provenance: EAR (15 CFR 730-774), CCL. ECCN format: [0-9][A-E][0-9]{3}.
-# ─────────────────────────────────────────────────────────────────────
+# Export control (WARN) — EAR / ECCN patterns.
 
 _EXPORT_CONTROL_PATTERNS: list[Pattern] = [
     Pattern(
@@ -240,18 +177,7 @@ _EXPORT_CONTROL_PATTERNS: list[Pattern] = [
 ]
 
 
-# ─────────────────────────────────────────────────────────────────────
-# ITAR / USML technical categories — WARN
-# ─────────────────────────────────────────────────────────────────────
-# Provenance: 22 CFR 121.1 — USML Categories I–XXI.
-#
-# WARNING: This list is DELIBERATELY INCOMPLETE in v1. Specific weapon-
-# system nomenclature lists (missile model numbers, specific munition
-# designators) should be added only after legal review per §7.3.C.
-#
-# The patterns here are conservative: category-header language, not
-# component nomenclature.
-# ─────────────────────────────────────────────────────────────────────
+# ITAR/USML (WARN) — 22 CFR 121.1; incomplete until §7.3.C (no weapon-specific SKUs).
 
 _ITAR_PATTERNS: list[Pattern] = [
     Pattern(
@@ -264,8 +190,6 @@ _ITAR_PATTERNS: list[Pattern] = [
         ),
         provenance="22 CFR 121.1 — USML category reference",
     ),
-    # Category-header keywords. Intentionally broad; the WARN tier strips
-    # the span from hooks rather than aborting the run.
     Pattern(
         marker=Marker.ITAR_USML,
         severity=Severity.WARN,
@@ -286,14 +210,9 @@ _ITAR_PATTERNS: list[Pattern] = [
         ),
         provenance="USML Cat XIV — chemical/biological weapons",
     ),
-    # TODO(§7.3.C): Add USML Cat V (explosives), Cat VIII (aircraft),
-    # Cat XI (military electronics) patterns after legal review.
+    # TODO §7.3.C: USML Cat V/VIII/XI patterns after legal review.
 ]
 
-
-# ─────────────────────────────────────────────────────────────────────
-# Public surface
-# ─────────────────────────────────────────────────────────────────────
 
 ALL_PATTERNS: list[Pattern] = (
     _CLASSIFIED_PATTERNS + _CUI_PATTERNS + _EXPORT_CONTROL_PATTERNS + _ITAR_PATTERNS
