@@ -16,7 +16,12 @@ from typing import Literal
 from pydantic import BaseModel, Field, HttpUrl
 
 Track = Literal["track_1", "track_2", "neither"]
-Verdict = Literal["high_confidence", "low_confidence", "insufficient_data"]
+Verdict = Literal[
+    "high_confidence",
+    "medium_confidence",
+    "low_confidence",
+    "insufficient_data",
+]
 
 
 class PersonalizationHook(BaseModel):
@@ -240,8 +245,9 @@ class Brief(BaseModel):
         default=None,
         max_length=800,
         description=(
-            "Populated when verdict != high_confidence. Human-readable reason "
-            "(e.g. 'SAM.gov returned name_fuzzy_low'). Required by §9."
+            "Populated when verdict is not high_confidence. Human-readable reason "
+            "(e.g. 'SAM.gov returned name_fuzzy_low'). Required by §9 for "
+            "medium_confidence, low_confidence, and insufficient_data."
         ),
     )
     rationale: str = Field(

@@ -1,0 +1,29 @@
+---
+description: Audit-first AI slop detection and conservative remediation; full workflow lives in the linked project skill.
+alwaysApply: true
+---
+
+# AI slop remediation (project)
+
+**Core principle:** detection is broad; remediation is conservative. When unsure, flag or propose - do not apply.
+
+## Source of truth
+
+For the full phased workflow (inventory → detection → classification → remediation → proposals → reporting), refusal gates, bucket A/B/C rules, exclusions (generated/vendor), and "what not to do," **read and follow**:
+
+`.cursor/skills/ai-slop-remediation/SKILL.md`
+
+For structured pass summaries, use:
+
+`.cursor/skills/ai-slop-remediation/report-template.md`
+
+## Non-negotiables (always)
+
+- **Audit-first:** no code edits until git state, branch, conventions, and baseline tests/lint/types (if present) are understood; treat current commit as rollback anchor.
+- **Refuse or narrow:** no meaningful tests → do not remove abstractions, dedupe logic, or delete possibly dead code except the narrow mechanical cases defined in the skill. Dirty tree → ask user to commit/stash first. No git → detection-only, no auto-fix. Baseline already failing → no behavior-adjacent cleanup unless user explicitly accepts risk.
+- **Auto-apply only bucket A** (mechanical, no behavioral change by construction). Bucket B = proposed diff + risks; bucket C = flag only.
+- **Scope:** broad refactors, migrations, and "modernize everywhere" are **not** slop remediation - audit first, recommend those separately.
+
+## When writing or editing code here
+
+Match existing project patterns; avoid new helpers, types, or layers without clear reuse or complexity reduction; no speculative future-proofing; high-signal comments only.

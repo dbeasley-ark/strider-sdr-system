@@ -41,7 +41,7 @@ Single verb (*qualifies*), single decision bundle (*accept + angle*), bounded ti
 - [ ] Brief names 2–3 target roles to approach inside the company, each with a one-line rationale
 - [ ] Brief includes 3–5 personalization hooks, each with a citation URL to a public source
 - [ ] On a 20-company golden set (see §8), Track classification matches a human reviewer ≥85%
-- [ ] On an adversarial set (non-defense companies, shell LLCs with no web presence, attempted prompt injections), 100% produce a `low_confidence` or `insufficient_data` verdict — never a confident false-positive
+- [ ] On an adversarial set (non-defense companies, shell LLCs with no web presence, attempted prompt injections), 100% **never** emit `high_confidence` on a false positive (`low_confidence`, `medium_confidence`, or `insufficient_data` are acceptable)
 
 **Non-goals.** What this agent explicitly does NOT do:
 
@@ -80,7 +80,7 @@ Nominally `reversible` — the agent is read-only and its output is a brief a hu
 
 1. **Leakage into output** (most costly) — brief surfaces ITAR-adjacent technical detail, competitor-confidential content, or paywalled material. Legal + compliance exposure in a regulated vertical. → Demands an **output filter** (§7).
 2. **Prompt-injection success** — adversarial web content pivots the agent into exfiltrating scoring logic, system prompt, or prior-session context via outbound fetch. Reputation + IP damage. → Demands **input validator + sandboxed fetch** (§7).
-3. **Hallucinated citation** — SDR uses a fabricated contract award or press mention in outreach; prospect notices; Arkenstone looks sloppy in a small, reputation-driven community. → Demands **citation validation + `low_confidence` fallback** (§8 eval gate).
+3. **Hallucinated citation** — SDR uses a fabricated contract award or press mention in outreach; prospect notices; Arkenstone looks sloppy in a small, reputation-driven community. → Demands **citation validation + verdict downgrade below `high_confidence`** (typically `medium_confidence` or `low_confidence`; §8 eval gate).
 4. **False-negative Track 1** — a real Track 1 company is labeled `neither`. Silent missed revenue. → Demands **recall-tuned evals** (§8 goldens include borderline-Track-1 cases).
 5. **False-positive Track 1** (tolerated in v1) — wasted SDR discovery call. **Recall > precision bias** is explicit and deliberate.
 
@@ -88,7 +88,7 @@ Nominally `reversible` — the agent is read-only and its output is a brief a hu
 
 Implicit HITL — the human caller reads every brief before any outreach happens. No write-side actions exist, so no formal HITL gate is needed in v1. Formal HITL gates (§9) become necessary at v2 (CRM-triggered) and mandatory at v3 (automated).
 
-Confidence signaling (§9 detail): every brief includes a top-level `verdict` field ∈ {`high_confidence`, `low_confidence`, `insufficient_data`} — and a human-readable `why_not_confident` string when the verdict is anything but `high_confidence`. Recall > precision bias means the agent defaults to `low_confidence` rather than a confident false-positive.
+Confidence signaling (§9 detail): every brief includes a top-level `verdict` field ∈ {`high_confidence`, `medium_confidence`, `low_confidence`, `insufficient_data`} — and a human-readable `why_not_confident` string when the verdict is anything but `high_confidence`. Recall > precision bias means the agent defaults toward `low_confidence` or `medium_confidence` rather than `high_confidence` when signals are incomplete.
 
 ---
 
@@ -269,7 +269,7 @@ class FetchCompanyPageOutput(BaseModel):
   4. `"<company>" funding OR Series OR raised` (revenue-stage signal)
   5. `"<company>" CEO OR founder OR CTO` (persona signal)
   6. Reserved for ad-hoc follow-up based on partial results.
-- **Citation passthrough — hard requirement.** Every `hook` in the final brief must carry a non-null `citation_url` that originated from either `fetch_company_page.final_url` or a `web_search` citation. Hooks without a citation are dropped by the output validator and the verdict is downgraded to `low_confidence`.
+- **Citation passthrough — hard requirement.** Every `hook` in the final brief must carry a non-null `citation_url` that originated from either `fetch_company_page.final_url` or a `web_search` citation. Hooks without a trace-backed citation are dropped by the output validator; if the model had claimed `high_confidence`, the verdict is downgraded (hook-only drops → `medium_confidence`; compliance WARN path → `low_confidence`).
 
 **Failure modes.**
 
@@ -534,7 +534,7 @@ Per-tool failure modes are in §4.1–§4.5. This section lists cross-cutting fa
 | Tool returns unexpected data | Pydantic validation on tool output | Log schema-drift incident; return error record to LLM; LLM decides to retry or fall back |
 | Tool times out | Per-tool reliability wrapper | Retry with exp backoff (per-tool rules in §4); circuit-break after K failures |
 | Agent loops without progress | Global tool-call counter (budget = 12) | Halt; return `verdict=insufficient_data` + `halt_reason=tool_budget_exhausted` (or tool-clamp path asks model to emit JSON first) |
-| Wall-clock budget exceeded | Orchestration timer (checked between LLM rounds) | Optional **post-wall synthesis**: one tools-off LLM turn turns the transcript into a schema-valid brief, usually `low_confidence`, with `why_not_confident` citing the time cap. If synthesis is disabled or fails, return `insufficient_data` + `halt_reason=wall_budget_exhausted`. |
+| Wall-clock budget exceeded | Orchestration timer (checked between LLM rounds) | Optional **post-wall synthesis**: one tools-off LLM turn turns the transcript into a schema-valid brief, usually `medium_confidence` or `low_confidence`, with `why_not_confident` citing the time cap. If synthesis is disabled or fails, return `insufficient_data` + `halt_reason=wall_budget_exhausted`. |
 | Context exceeds 40k tokens | Token accounting in orchestration | Halt; return `verdict=insufficient_data` + `halt_reason=context_budget_exhausted` |
 | Prompt injection detected in fetched content | `injection_signals` populated by `fetch_company_page` | Content delimited but included (§7.1); output validator verifies no injected claims survived into brief |
 | Classified / CUI marker detected | Output filter (§7.3) | **HARD STOP.** Abort run; write `SECURITY_INCIDENT` line to trace; no brief returned; exit nonzero |
@@ -551,7 +551,7 @@ Per-tool failure modes are in §4.1–§4.5. This section lists cross-cutting fa
 - **Max wall-clock per run (seconds):** 90 (matches §1 acceptance criterion)
 - **Max context tokens per turn:** 40,000 (headroom under the 50k threshold)
 
-On tool/cost/context/output-token budget violations the agent returns a structured `insufficient_data` brief with a machine-readable `halt_reason` when it cannot salvage a model brief. **Wall budget** may instead trigger a bounded synthesis-only continuation that returns a normal brief (typically `low_confidence`) while the trace records the wall event — see env `AGENT_WALL_SYNTHESIS_*`. Never a silent timeout.
+On tool/cost/context/output-token budget violations the agent returns a structured `insufficient_data` brief with a machine-readable `halt_reason` when it cannot salvage a model brief. **Wall budget** may instead trigger a bounded synthesis-only continuation that returns a normal brief (typically `medium_confidence` or `low_confidence`) while the trace records the wall event — see env `AGENT_WALL_SYNTHESIS_*`. Never a silent timeout.
 
 ---
 
@@ -769,11 +769,14 @@ Of all briefs emitting `high_confidence`, ≥ 95% must match golden label. If th
 
 Every brief carries a top-level `verdict`:
 
-- `high_confidence` — Track classification backed by multiple independent signals (e.g., SAM active + ≥1 USAspending prime + recent press alignment)
-- `low_confidence` — Track best-guess but weak signals; SDR should verify before pursuit
+- `high_confidence` — Track classification backed by multiple independent, trace-backed signals (e.g., SAM active + ≥1 USAspending prime + hooks citing trace URLs)
+- `medium_confidence` — Track is defensible from the run, but something material is thin or incomplete (e.g., single strong pillar without a second independent check; mechanical downgrade from `high_confidence` when only non-trace hooks were dropped)
+- `low_confidence` — Track best-guess with weak or conflicting signals; SDR should verify before pursuit (includes compliance WARN downgrades from `high_confidence`)
 - `insufficient_data` — cannot classify; agent bailed rather than guess (recall > precision bias from §2)
 
 When verdict ≠ `high_confidence`, a human-readable `why_not_confident` string is populated (e.g., *"SAM.gov returned name_fuzzy_low; no UEI match confirmed. Multiple entities with similar legal name; brief treats Shield AI as the matched entity but confidence is reduced."*).
+
+The §8 **≥95% calibration target applies only to `high_confidence` briefs** — not to `medium_confidence`; that tier is intentionally excluded from the strict high-confidence KPI.
 
 **Escalation path.**
 
@@ -788,7 +791,7 @@ V1 is CLI — the caller IS the human-in-the-loop. No formal escalation surface 
 A "bad day" from the caller's perspective looks like:
 
 - A brief arrives within the wall budget (or shortly after, if one synthesis round is allowed), structured JSON, with `verdict=insufficient_data` and a clear `why_not_confident` string when the run truly could not classify
-- OR a **partial** brief with `verdict=low_confidence` after wall budget, where `why_not_confident` explains missing checks — the SDR continues research manually
+- OR a **partial** brief with `verdict=medium_confidence` or `verdict=low_confidence` after wall budget, where `why_not_confident` explains missing checks — the SDR continues research manually
 - OR a clear stderr message explaining what's broken (missing key, kill-switch on, egress blocked)
 - NEVER a stack trace, NEVER a silent empty result without `brief.json`, NEVER a confident fabrication
 

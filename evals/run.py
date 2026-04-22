@@ -107,7 +107,8 @@ async def _run_case(case: EvalCase) -> EvalResult:
 _VERDICT_RANK = {
     "insufficient_data": 0,
     "low_confidence": 1,
-    "high_confidence": 2,
+    "medium_confidence": 2,
+    "high_confidence": 3,
 }
 
 

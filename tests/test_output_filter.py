@@ -3,6 +3,7 @@
 Covers:
   * HARD_STOP classified markings raise ComplianceHardStop.
   * CUI WARN markings downgrade a high_confidence verdict to low_confidence.
+  * Hook-only mass drops downgrade high_confidence to medium_confidence.
   * Hooks whose citation_url is not in the trace are dropped.
   * Mass hook drops downgrade verdict.
 """
@@ -77,6 +78,27 @@ def test_cui_downgrades_verdict() -> None:
     assert "compliance" in (report.downgrade_reason or "")
 
 
+def test_cui_plus_hook_drops_stays_low_not_medium() -> None:
+    """Compliance WARN wins over hook-only medium tier."""
+    brief = _base_brief(
+        rationale=(
+            "CUI//SP-PRVCY flagged text. Also citing hooks that are not in trace."
+        ),
+        hooks=[
+            PersonalizationHook(
+                text="Made-up hook one. " * 2,
+                citation_url="https://evil.com/a",
+            ),
+        ],
+    )
+    filtered, report = apply_filter(brief, fetched_urls=set(), citation_urls=set())
+    assert filtered.verdict == "low_confidence"
+    assert filtered.hooks == []
+    assert report.downgraded_verdict
+    assert "compliance" in (report.downgrade_reason or "")
+    assert "validator" in (report.downgrade_reason or "").lower()
+
+
 def test_hook_without_matching_citation_is_dropped() -> None:
     hook_ok = PersonalizationHook(
         text="Cited a real press hit about their Navy contract.",
@@ -112,7 +134,7 @@ def test_all_hooks_dropped_downgrades() -> None:
         ]
     )
     filtered, report = apply_filter(brief, fetched_urls=set(), citation_urls=set())
-    assert filtered.verdict == "low_confidence"
+    assert filtered.verdict == "medium_confidence"
     assert filtered.hooks == []
     assert report.downgraded_verdict
 

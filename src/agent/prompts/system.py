@@ -82,16 +82,30 @@ Neither:
    will be downgraded.
 
 5. **Recall > precision.** When signals are borderline, return
-   `low_confidence` or `insufficient_data` rather than a confident
-   false-positive. A cold SDR follow-up on a miscalled Track 1 is
+   `medium_confidence`, `low_confidence`, or `insufficient_data` rather than a
+   confident false-positive. A cold SDR follow-up on a miscalled Track 1 is
    worse than a skipped ambiguous lead.
+
+5a. **Verdict calibration (top-level `verdict`).**
+   • `high_confidence` — Track call is supported by **multiple independent**
+     tool-backed signals (e.g. SAM + USAspending + trace-cited hooks).
+   • `medium_confidence` — Track is defensible from the run, but something
+     material is missing, thin, or single-pillar: e.g. one strong federal
+     dimension without a second independent check; revenue band uncertain;
+     wall-clock pressure limited verification; or hooks/rationale lean on a
+     narrower evidence base than `high_confidence` requires.
+   • `low_confidence` — Best-effort track; weak, conflicting, or sparse
+     evidence — the SDR should verify before relying on the classification.
+   • `insufficient_data` — Cannot classify even coarsely without guessing.
 
 5b. **Time pressure and partial briefs.** If wall-clock or tool budget is
    tight, prefer a **partial but honest** brief over stalling: fill every
    schema section with real tool-backed facts or explicit unknowns; set
-   `verdict` to `low_confidence` (not `insufficient_data`) when you can
-   still defend a Track call with at least one solid signal. Use
-   `why_not_confident` to name what was skipped or unverified. Never
+   `verdict` to `medium_confidence` or `low_confidence` (not `insufficient_data`)
+   when you can still defend a Track call with at least one solid signal.
+   Prefer `medium_confidence` when the transcript is genuinely informative
+   but incomplete; `low_confidence` when the signal is thin or contested.
+   Use `why_not_confident` to name what was skipped or unverified. Never
    fabricate to fill fields.
 
 6. **Stop when confident.** When you have enough evidence for a
@@ -150,8 +164,8 @@ matching this shape:
   "domain": "<company domain or null>",
   "uei": "<12-char SAM UEI or null>",
   "track": "track_1" | "track_2" | "neither",
-  "verdict": "high_confidence" | "low_confidence" | "insufficient_data",
-  "why_not_confident": "<one sentence or null>",
+  "verdict": "high_confidence" | "medium_confidence" | "low_confidence" | "insufficient_data",
+  "why_not_confident": "<one sentence when verdict is not high_confidence; null only for high_confidence>",
   "rationale": "<2–4 sentences citing SPECIFIC signals from tool output>",
   "revenue_estimate": {
     "band": "<under_10m | 10m_to_50m | 50m_to_250m | 250m_to_1b | 1b_to_2b | over_2b | unknown>",
@@ -215,9 +229,9 @@ no trace-backed hooks possible), emit `verdict: "insufficient_data"`,
 `why_not_confident`.
 
 If you have **partial** evidence (e.g. SAM or web_search signal but no
-USAspending yet), prefer `low_confidence` with trace-cited hooks and an
-explicit `why_not_confident` over `insufficient_data` — the human can
-extend research manually.
+USAspending yet), prefer `medium_confidence` or `low_confidence` with
+trace-cited hooks and an explicit `why_not_confident` over
+`insufficient_data` — the human can extend research manually.
 """
 
 

@@ -6,13 +6,14 @@ same "brief about to be returned" choke point:
     1. Compliance scan (§7.3) — scan text fields for classified /
        CUI / ITAR / export-control markings. HARD_STOP markings abort
        the run; WARN markings strip the offending span and force
-       verdict=low_confidence.
+       verdict=low_confidence when the model claimed high_confidence.
 
     2. Citation validation (§7.1) — every hook.citation_url must
        resolve to a URL that actually appeared as a fetched URL or
        a web_search citation in this run's trace. Hooks whose URL
        has no matching tool call are dropped; if that empties the
-       hooks list or leaves it sparse, verdict is downgraded.
+       hooks list or leaves it sparse, a high_confidence verdict is
+       downgraded to medium_confidence (hook-only issue; no compliance WARN).
 
 Runs as a non-LLM pass. That's deliberate: the LLM is the thing we
 don't fully trust for security-critical decisions.
@@ -108,8 +109,14 @@ def apply_filter(
 
     new_verdict = brief.verdict
     new_why = brief.why_not_confident
-    if brief.verdict == "high_confidence" and (downgraded_for_compliance or downgraded_for_hooks):
-        new_verdict = "low_confidence"
+    if brief.verdict == "high_confidence" and (
+        downgraded_for_compliance or downgraded_for_hooks
+    ):
+        # Compliance WARN: stay conservative. Hook-only drops: medium tier.
+        if downgraded_for_compliance:
+            new_verdict = "low_confidence"
+        else:
+            new_verdict = "medium_confidence"
         reasons = []
         if downgraded_for_compliance:
             reasons.append("compliance scan flagged content")

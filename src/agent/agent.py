@@ -1184,8 +1184,8 @@ def _wall_synthesis_user_message(*, company: str, wall_reason: str) -> str:
             "",
             "Requirements:",
             f"  • company_name_queried: use the queried company ({company!r}) verbatim.",
-            "  • verdict: prefer low_confidence unless the transcript already contains "
-            "multiple independent, explicit signals for high_confidence.",
+            "  • verdict: prefer medium_confidence or low_confidence unless the transcript "
+            "already contains multiple independent, explicit signals for high_confidence.",
             "  • why_not_confident: one sentence mentioning the wall-clock limit and "
             "anything you could not verify without more time/tools.",
             "  • Every hook.citation_url must appear in this run's tool trace "
@@ -1216,8 +1216,9 @@ def _wall_reserve_nudge_message(
             "then STOP and emit the final Brief JSON. If you already have enough "
             "signal, emit the JSON now without additional tools.",
             "",
-            "When uncertain, prefer low_confidence with honest why_not_confident "
-            "over insufficient_data, as long as hooks only cite trace-backed URLs.",
+            "When uncertain, prefer medium_confidence or low_confidence with honest "
+            "why_not_confident over insufficient_data, as long as hooks only cite "
+            "trace-backed URLs.",
         ]
     )
 
