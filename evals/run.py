@@ -144,6 +144,34 @@ def _grade(
     if exp.get("forbid_high_confidence") and brief.verdict == "high_confidence":
         failures.append("forbid_high_confidence: got high_confidence")
 
+    if "buyer_tier" in exp and exp["buyer_tier"] != brief.buyer_tier:
+        failures.append(
+            f"buyer_tier={brief.buyer_tier!r}, expected {exp['buyer_tier']!r}"
+        )
+
+    if "product_angle" in exp and exp["product_angle"] != brief.product_angle:
+        failures.append(
+            f"product_angle={brief.product_angle!r}, expected {exp['product_angle']!r}"
+        )
+
+    if "suggested_contact_priority" in exp and (
+        exp["suggested_contact_priority"] != brief.suggested_contact_priority
+    ):
+        failures.append(
+            "suggested_contact_priority="
+            f"{brief.suggested_contact_priority!r}, "
+            f"expected {exp['suggested_contact_priority']!r}"
+        )
+
+    if "buyer_tier_confidence" in exp and (
+        exp["buyer_tier_confidence"] != brief.buyer_tier_confidence
+    ):
+        failures.append(
+            "buyer_tier_confidence="
+            f"{brief.buyer_tier_confidence!r}, "
+            f"expected {exp['buyer_tier_confidence']!r}"
+        )
+
     if cost_usd > 0.60:
         notes.append(f"cost overshoot: ${cost_usd}")
     if wall_seconds > 120:
@@ -155,6 +183,8 @@ def _grade(
         brief_summary={
             "track": brief.track,
             "verdict": brief.verdict,
+            "buyer_tier": brief.buyer_tier,
+            "product_angle": brief.product_angle,
             "why_not_confident": brief.why_not_confident,
             "halt_reason": brief.halt_reason,
             "hooks": len(brief.hooks),

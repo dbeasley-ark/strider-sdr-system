@@ -1,4 +1,4 @@
-# Slop remediation report
+# Code quality review report
 
 ## Summary stats
 

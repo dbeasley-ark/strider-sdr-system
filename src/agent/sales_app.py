@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 import re
 import sys
 import uuid
@@ -26,7 +27,7 @@ from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlparse
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -76,6 +77,32 @@ def _pythonpath_for_subprocess() -> dict[str, str]:
         prev = env.get("PYTHONPATH", "")
         env["PYTHONPATH"] = str(src) + (os.pathsep + prev if prev else "")
     return env
+
+
+def _merge_repo_dotenv(env: dict[str, str], *, dotenv_path: Path) -> dict[str, str]:
+    """Overlay ``.env`` onto ``env`` so the file wins (including over empty exports).
+
+    The agent subprocess inherits ``os.environ``. An empty ``SAM_GOV_API_KEY=``
+    from the parent or container often blocks pydantic-settings from using the
+    real value in ``.env``. Merging here keeps single-run / batch runs aligned
+    with the repo root ``.env`` without requiring a UI server restart after edits.
+    """
+    if not dotenv_path.is_file():
+        return env
+    merged = dict(env)
+    for k, v in dotenv_values(dotenv_path).items():
+        if v is None:
+            continue
+        merged[str(k)] = str(v)
+    return merged
+
+
+def _agent_subprocess_env() -> dict[str, str]:
+    """Environment for ``python -m agent`` child processes (PYTHONPATH + root ``.env``)."""
+    return _merge_repo_dotenv(
+        _pythonpath_for_subprocess(),
+        dotenv_path=REPO_ROOT / ".env",
+    )
 
 
 @dataclass
@@ -192,7 +219,7 @@ async def _run_batch(job_id: str) -> None:
         },
     )
 
-    env = _pythonpath_for_subprocess()
+    env = _agent_subprocess_env()
 
     for row in job.rows:
         row.status = "running"
@@ -477,17 +504,29 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Unknown job_id.")
 
         async def gen() -> AsyncIterator[str]:
+            """Stream job events as SSE.
+
+            Emit periodic comment lines while waiting so proxies and browsers do not
+            treat the connection as idle during long per-row agent runs (no events for
+            minutes otherwise → common ~60s idle disconnect).
+            """
             idx = 0
+            idle_since = time.monotonic()
+            ping_interval_s = 15.0
             while True:
                 async with job.lock:
                     while idx < len(job.events):
                         line = json.dumps(job.events[idx], default=str)
                         idx += 1
                         yield f"data: {line}\n\n"
+                        idle_since = time.monotonic()
                     done = job.finished and idx >= len(job.events)
                 if done:
                     break
                 await asyncio.sleep(0.2)
+                if time.monotonic() - idle_since >= ping_interval_s:
+                    yield ": ping\n\n"
+                    idle_since = time.monotonic()
 
         return StreamingResponse(
             gen(),

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { buildBriefPresentation } from "./briefPresentation";
 import {
   buildSingleBriefPayload,
@@ -22,7 +23,9 @@ export default function BriefCard({
   savedAt,
   brief,
 }: Props) {
+  const [expanded, setExpanded] = useState(false);
   const pres = buildBriefPresentation(brief);
+  const bodyId = `brief-body-${index}`;
 
   const entry = {
     index,
@@ -52,10 +55,48 @@ export default function BriefCard({
   };
 
   return (
-    <article className="brief-card">
+    <article className={`brief-card ${expanded ? "brief-card--expanded" : "brief-card--collapsed"}`}>
       <header className="brief-card-head">
         <div className="brief-card-head-row">
-          <span className="brief-card-kicker">Brief · Row {index + 1}</span>
+          <button
+            type="button"
+            className="brief-card-summary"
+            aria-expanded={expanded}
+            aria-controls={bodyId}
+            onClick={() => setExpanded((v) => !v)}
+          >
+            <span className="brief-card-chevron" aria-hidden />
+            <span className="brief-card-summary-text">
+              <span className="brief-card-kicker">Brief · Row {index + 1}</span>
+              <span className="brief-card-title" role="heading" aria-level={3}>
+                {pres.title}
+              </span>
+              <span className="brief-card-sub muted">
+                Queried as {company}
+                {domain ? ` · ${domain}` : ""}
+              </span>
+              <span className="brief-card-tags">
+                {pres.track ? (
+                  <span className="brief-tag">
+                    <span className="brief-tag-dot" />
+                    {pres.track}
+                  </span>
+                ) : null}
+                {pres.verdict ? (
+                  <span className="brief-tag brief-tag-verdict">
+                    <span className="brief-tag-dot" />
+                    {pres.verdict}
+                  </span>
+                ) : null}
+                {pres.revBand ? <span className="brief-meta">{pres.revBand}</span> : null}
+                {pres.wallSeconds !== undefined && pres.costUsd !== undefined ? (
+                  <span className="brief-meta">
+                    {pres.wallSeconds.toFixed(0)}s · ${pres.costUsd.toFixed(2)}
+                  </span>
+                ) : null}
+              </span>
+            </span>
+          </button>
           <div className="brief-card-actions">
             <button
               type="button"
@@ -73,33 +114,9 @@ export default function BriefCard({
             </button>
           </div>
         </div>
-        <h3 className="brief-card-title">{pres.title}</h3>
-        <p className="brief-card-sub muted">
-          Queried as {company}
-          {domain ? ` · ${domain}` : ""}
-        </p>
-        <div className="brief-card-tags">
-          {pres.track ? (
-            <span className="brief-tag">
-              <span className="brief-tag-dot" />
-              {pres.track}
-            </span>
-          ) : null}
-          {pres.verdict ? (
-            <span className="brief-tag brief-tag-verdict">
-              <span className="brief-tag-dot" />
-              {pres.verdict}
-            </span>
-          ) : null}
-          {pres.revBand ? <span className="brief-meta">{pres.revBand}</span> : null}
-          {pres.wallSeconds !== undefined && pres.costUsd !== undefined ? (
-            <span className="brief-meta">
-              {pres.wallSeconds.toFixed(0)}s · ${pres.costUsd.toFixed(2)}
-            </span>
-          ) : null}
-        </div>
       </header>
 
+      <div id={bodyId} className="brief-card-body" hidden={!expanded}>
       {pres.why ? (
         <p className="brief-why muted">
           <span className="brief-why-label">Confidence</span> {pres.why}
@@ -283,6 +300,7 @@ export default function BriefCard({
           </ul>
         </section>
       ) : null}
+      </div>
     </article>
   );
 }

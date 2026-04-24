@@ -63,3 +63,16 @@ def test_parse_txt_as_csv() -> None:
     raw = b"Company\nDelta Co\n"
     sheet = parse_prospect_spreadsheet(raw, filename="export.txt")
     assert sheet.rows == [("Delta Co", None)]
+
+
+def test_max_rows_caps_when_set() -> None:
+    raw = b"Company\nA\nB\nC\n"
+    sheet = parse_prospect_spreadsheet(raw, filename="t.csv", max_rows=2)
+    assert sheet.rows == [("A", None), ("B", None)]
+
+
+def test_max_rows_none_is_unlimited() -> None:
+    lines = ["Company"] + [f"C{i}" for i in range(600)]
+    raw = ("\n".join(lines) + "\n").encode()
+    sheet = parse_prospect_spreadsheet(raw, filename="t.csv", max_rows=None)
+    assert len(sheet.rows) == 600

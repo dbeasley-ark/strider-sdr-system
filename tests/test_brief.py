@@ -67,6 +67,9 @@ def test_insufficient_data_helper() -> None:
     assert b.track == "neither"
     assert b.halt_reason == "tool_budget_exhausted"
     assert b.hooks == []
+    assert b.buyer_tier == "unknown"
+    assert b.product_angle == "unclear"
+    assert b.suggested_contact_priority == "unknown"
 
 
 def test_insufficient_data_max_output_tokens_halt() -> None:

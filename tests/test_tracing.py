@@ -71,3 +71,20 @@ def test_slugify_strips_scheme_and_tld() -> None:
     assert slugify("https://www.Shield.AI/about/") == "shield-ai"
     assert slugify("Anduril Industries, Inc.") == "anduril-industries-inc"
     assert slugify("") == "unknown"
+
+
+def test_trace_tool_result_fields_scrubbed(tmp_path: Path) -> None:
+    """tool_error / tool_detail_preview may echo API text; trace must redact."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    with Trace(run_dir=run_dir, run_id="r") as t:
+        t.event(
+            "tool.result",
+            tool="lookup_sam_registration",
+            tool_id="id1",
+            is_error=True,
+            tool_error="SAM 400: https://api.sam.gov/x?api_key=abcdef123456789012345678",
+        )
+    raw = (run_dir / "trace.jsonl").read_text(encoding="utf-8")
+    assert "abcdef123456789012345678" not in raw
+    assert "REDACTED" in raw

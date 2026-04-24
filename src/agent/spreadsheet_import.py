@@ -116,7 +116,7 @@ def parse_prospect_spreadsheet(
     filename: str,
     company_column: str | None = None,
     domain_column: str | None = None,
-    max_rows: int = 500,
+    max_rows: int | None = None,
 ) -> ParsedSheet:
     """Parse CSV or XLSX. Headers must be in the first row."""
     suffix = Path(filename).suffix.lower()
@@ -180,7 +180,7 @@ def parse_prospect_spreadsheet(
             d = row[domain_idx].strip()
             domain = d or None
         out.append((company, domain))
-        if len(out) >= max_rows:
+        if max_rows is not None and len(out) >= max_rows:
             break
 
     if not out:

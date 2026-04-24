@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from agent.agent import Agent
+from agent.agent import Agent, _assistant_turn_pending
 from agent.config import settings
 from agent.tools.registry import ToolRegistry
 
@@ -213,6 +213,17 @@ async def test_brief_parse_repair_one_retry(
     assert result.status == "ok"
     assert len(calls) == 2
     assert result.brief.verdict == "low_confidence"
+
+
+def test_assistant_turn_pending_detects_trailing_assistant() -> None:
+    assert not _assistant_turn_pending([])
+    assert not _assistant_turn_pending([{"role": "user", "content": []}])
+    assert _assistant_turn_pending(
+        [
+            {"role": "user", "content": []},
+            {"role": "assistant", "content": []},
+        ]
+    )
 
 
 @pytest.mark.asyncio

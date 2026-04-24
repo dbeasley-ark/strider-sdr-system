@@ -109,3 +109,9 @@ export function bundleBriefsPdfFilename(jobId: string, jobName: string | null): 
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
   return `briefs-${label}-${stamp}.pdf`;
 }
+
+export function bundleBriefsExcelFilename(jobId: string, jobName: string | null): string {
+  const label = jobName ? safeFileSegment(jobName.replace(/\.[^.]+$/, "")) : safeFileSegment(jobId.slice(0, 8));
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  return `briefs-${label}-${stamp}.xlsx`;
+}

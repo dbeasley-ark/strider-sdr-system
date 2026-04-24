@@ -227,6 +227,11 @@ class Agent:
                                 wall_s=wall,
                                 phase="synthesis_attempt",
                             )
+                            # If we stopped on a server-tool pause (`pause_turn`), the
+                            # transcript still ends with an assistant turn until the API
+                            # resumes. Capture that before appending the synthesis user
+                            # message (which would hide the trailing-assistant signal).
+                            wall_synth_allow_tools = _assistant_turn_pending(messages)
                             messages.append(
                                 {
                                     "role": "user",
@@ -245,7 +250,7 @@ class Agent:
                             try:
                                 synth = await self._call_llm(
                                     messages,
-                                    allow_tools=False,
+                                    allow_tools=wall_synth_allow_tools,
                                     container_id=container_id,
                                     max_tokens=settings.wall_synthesis_max_tokens,
                                 )
@@ -519,10 +524,17 @@ class Agent:
                     ):
                         allow_tools = False
 
+                    llm_allow_tools = allow_tools or _assistant_turn_pending(messages)
+                    if llm_allow_tools and not allow_tools:
+                        trace.event(
+                            "llm.tools_for_trailing_assistant",
+                            iteration=iterations,
+                            wall_s=wall,
+                        )
                     trace.event("llm.request", iteration=iterations, msg_count=len(messages))
                     response = await self._call_llm(
                         messages,
-                        allow_tools=allow_tools,
+                        allow_tools=llm_allow_tools,
                         container_id=container_id,
                     )
                     new_container = getattr(response, "container", None)
@@ -900,7 +912,9 @@ class Agent:
             kwargs["tools"] = cached_tools
         if settings.thinking_adaptive:
             kwargs["thinking"] = {"type": "adaptive"}
-        # `container` only with tools on (otherwise invalid_request_error).
+        # Forward the code-exec / server-tool container only when this request
+        # includes `tools`. Callers set allow_tools True for normal tool turns and
+        # for "trailing assistant" resume (pause_turn / pending server tool uses).
         if container_id and allow_tools:
             kwargs["container"] = container_id
 
@@ -1057,13 +1071,26 @@ class Agent:
 
             _progress_for_tool(tool_name, result, emit)
 
-            is_error = isinstance(result, dict) and "error" in result
-            trace.event(
-                "tool.result",
-                tool=tool_name,
-                tool_id=tool_id,
-                is_error=is_error,
+            is_error = isinstance(result, dict) and _tool_payload_indicates_failure(
+                result
             )
+            trace_kwargs: dict[str, Any] = {
+                "tool": tool_name,
+                "tool_id": tool_id,
+                "is_error": is_error,
+            }
+            if is_error and isinstance(result, dict):
+                err_val = result.get("error")
+                if isinstance(err_val, str) and err_val.strip():
+                    trace_kwargs["tool_error"] = err_val.strip()[:500]
+                elif err_val is not None and not isinstance(err_val, str):
+                    trace_kwargs["tool_error"] = str(err_val)[:500]
+                detail = result.get("detail")
+                if detail is not None:
+                    trace_kwargs["tool_detail_preview"] = (
+                        json.dumps(detail, default=str)[:800]
+                    )
+            trace.event("tool.result", **trace_kwargs)
             return _as_tool_result(tool_id, result, is_error=is_error)
 
         return await asyncio.gather(*(_one(b) for b in tool_uses))
@@ -1151,6 +1178,20 @@ class Agent:
         )
 
 
+def _tool_payload_indicates_failure(payload: dict[str, Any]) -> bool:
+    """True when the tool returned a structured failure (not ``error: null``).
+
+    Pydantic tool outputs include an ``error`` key even on success; the trace
+    and Anthropic ``tool_result.is_error`` must only flip for real failures.
+    """
+    err = payload.get("error")
+    if err is None:
+        return False
+    if isinstance(err, str):
+        return bool(err.strip())
+    return True
+
+
 def _as_tool_result(tool_id: str, payload: Any, *, is_error: bool) -> dict[str, Any]:
     return {
         "type": "tool_result",
@@ -1158,6 +1199,19 @@ def _as_tool_result(tool_id: str, payload: Any, *, is_error: bool) -> dict[str, 
         "content": json.dumps(payload, default=str),
         "is_error": is_error,
     }
+
+
+def _assistant_turn_pending(messages: list[dict[str, Any]]) -> bool:
+    """True when the last message is from the assistant.
+
+    After ``stop_reason == "pause_turn"`` (native web_search / server tools), the
+    client must call :meth:`Messages.create` again with the same ``tools`` list
+    and ``container`` id. The final-buffer path can set ``allow_tools=False``;
+    combining that with a trailing assistant omits ``container`` and triggers
+    ``invalid_request_error: container_id is required when there are pending tool
+    uses generated by code execution with tools``.
+    """
+    return bool(messages) and messages[-1].get("role") == "assistant"
 
 
 def _extract_text(response: Message) -> str:

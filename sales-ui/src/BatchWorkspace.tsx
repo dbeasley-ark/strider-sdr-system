@@ -8,11 +8,13 @@ import {
 } from "./briefStorage";
 import {
   buildBriefBundlePayload,
+  bundleBriefsExcelFilename,
   bundleBriefsFilename,
   bundleBriefsPdfFilename,
   collectExportableEntries,
   downloadJsonFile,
 } from "./exportBriefs";
+import { downloadBriefsExcel } from "./exportBriefsExcel";
 import { briefFeedToPdfInputs, downloadBriefPdfBundle } from "./pdf/downloadBriefPdf";
 
 type ApiRow = {
@@ -326,6 +328,17 @@ export default function BatchWorkspace() {
     });
   }, [briefFeed, rows, jobId, jobName]);
 
+  const onExportAllBriefsExcel = useCallback(() => {
+    const stored = readStoredBriefFeed();
+    const entries = collectExportableEntries(briefFeed, rows);
+    if (!entries.length) return;
+    const jid = jobId ?? stored?.jobId ?? "unknown";
+    const jname = jobName ?? stored?.filename ?? null;
+    void downloadBriefsExcel(entries, bundleBriefsExcelFilename(jid, jname)).catch(() => {
+      /* workbook write or download failure */
+    });
+  }, [briefFeed, rows, jobId, jobName]);
+
   const exportableBriefEntries = useMemo(
     () => collectExportableEntries(briefFeed, rows),
     [briefFeed, rows],
@@ -492,6 +505,13 @@ export default function BatchWorkspace() {
                 onClick={onExportAllBriefsPdf}
               >
                 Download all briefs (PDF)
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-compact"
+                onClick={onExportAllBriefsExcel}
+              >
+                Download all briefs (Excel)
               </button>
               <button
                 type="button"

@@ -32,12 +32,21 @@ Single verb (*qualifies*), single decision bundle (*accept + angle*), bounded ti
 - **Track 1 (ICP 1):** Path to sponsorship with an agency identified and established timeline; $10M–$2B annual revenue.
 - **Track 2 (ICP 2):** Path to proactive FedRAMP expenditure (pre-sponsorship) with established process and timeline; $50M–$2B annual revenue.
 
+**Playbook buyer tier (sales motion)** — orthogonal to Track; both appear on the brief:
+
+- **Tier 1 (Strike zone):** Already on a commercial PEO (e.g. ADP, TriNet, Insperity, Rippling, Justworks, Sequoia One, Paychex) with active DoD/NASA work and CMMC-related pressure — displacement / “security upgrade” motion.
+- **Tier 2 (Displacement):** No PEO; founder or fractional ops running HR/payroll/benefits on federal work — “operational tax” motion.
+- **Tier 3 (Future growth):** Recent SBIR/STTR Phase II or III, small team scaling toward prime eligibility — “Foundation first, Cohort as headcount grows” motion.
+
+Track answers *federal-revenue posture*; buyer tier answers *which first-conversation and product-lead angle* the SDR should use. Example: Track 2 + Tier 3 is common (proactive federal + SBIR scaling).
+
 **Position in sales funnel:** the agent operates at the **pre-Lead → Lead** boundary — it qualifies an inbound signal (demo form, LinkedIn, partner referral) into a Lead, and its output seeds the first SDR outreach. It does NOT operate on outbound prospecting lists or automated discovery in v1.
 
 **Acceptance criteria.** v1 is "done" when all six are green:
 
 - [ ] Given a company domain or LinkedIn URL, agent returns a brief in ≤90s wall-clock and ≤$0.50 cost per run
 - [ ] Brief classifies the company as `track_1` / `track_2` / `neither` with a calibrated confidence score and a revenue-range estimate
+- [ ] Brief includes playbook-aligned fields: `buyer_tier`, `buyer_tier_rationale`, `buyer_tier_confidence`, `product_angle`, `suggested_contact_priority` (honest `unknown` when public signal is insufficient)
 - [ ] Brief names 2–3 target roles to approach inside the company, each with a one-line rationale
 - [ ] Brief includes 3–5 personalization hooks, each with a citation URL to a public source
 - [ ] On a 20-company golden set (see §8), Track classification matches a human reviewer ≥85%
@@ -114,6 +123,7 @@ Confidence signaling (§9 detail): every brief includes a top-level `verdict` fi
      │         │    lookup_usaspending_awards    (ours)
      │         │    lookup_sam_registration      (ours)
      │         │    lookup_sbir_awards           (ours)
+     │         │    lookup_fedramp_marketplace_products (ours)
      │         ▼
      │    [ Reliability wrapper: retry + timeout + circuit breaker ]
      │         ▼
@@ -152,7 +162,7 @@ No cross-run state in v1. Every run is independent.
 | Component | Est. tokens |
 |---|---|
 | System prompt (ICP defs, Track criteria, tool usage, injection hardening, scoring rubric) | ~2,500 |
-| Tool schemas (4 ours + native `web_search`) | ~1,500 |
+| Tool schemas (5 ours + native `web_search`) | ~1,600 |
 | User input | ~50 |
 | Accumulated tool results (~10 calls, peak) | ~20,000–30,000 |
 | Expected output brief | ~1,500 |
@@ -177,12 +187,13 @@ None in v1 — problem is small enough for a single context. The cleanest future
 | 3 | `lookup_usaspending_awards` | Arkenstone | Locked (§4.3) |
 | 4 | `lookup_sam_registration` | Arkenstone | Locked (§4.4) |
 | 5 | `lookup_sbir_awards` | Arkenstone | Locked (§4.5) |
+| 6 | `lookup_fedramp_marketplace_products` | Arkenstone | Locked (FedRAMP marketplace API) |
 
 Plus a private helper (not an LLM-facing tool):
 
-- `resolve_company_identity(name, domain)` — returns best-guess UEI/DUNS + confidence. Shared by tools 3/4/5. Logged to the run trace so the caller can audit which entity record was used.
+- `resolve_company_identity(name, domain)` — returns best-guess UEI/DUNS + confidence. Shared by tools 3–6. Logged to the run trace so the caller can audit which entity record was used.
 
-**Global tool-call budget (agent runaway protection):** max 12 tool calls per run. Hard limit. If hit without a confident verdict, agent returns `insufficient_data`.
+**Global tool-call budget (agent runaway protection):** max **13** tool calls per run (includes FedRAMP marketplace lookup). Hard limit. If hit without a confident verdict, agent returns `insufficient_data`. The number is defined once in application config (`max_tool_calls`) and mirrored in the system prompt JSON contract.
 
 ---
 
@@ -533,7 +544,7 @@ Per-tool failure modes are in §4.1–§4.5. This section lists cross-cutting fa
 | LLM returns invalid tool args | Pydantic validation on tool input | Return validation error to LLM next turn; retry up to 3x; escalate to caller if still failing |
 | Tool returns unexpected data | Pydantic validation on tool output | Log schema-drift incident; return error record to LLM; LLM decides to retry or fall back |
 | Tool times out | Per-tool reliability wrapper | Retry with exp backoff (per-tool rules in §4); circuit-break after K failures |
-| Agent loops without progress | Global tool-call counter (budget = 12) | Halt; return `verdict=insufficient_data` + `halt_reason=tool_budget_exhausted` (or tool-clamp path asks model to emit JSON first) |
+| Agent loops without progress | Global tool-call counter (budget = 13) | Halt; return `verdict=insufficient_data` + `halt_reason=tool_budget_exhausted` (or tool-clamp path asks model to emit JSON first) |
 | Wall-clock budget exceeded | Orchestration timer (checked between LLM rounds) | Optional **post-wall synthesis**: one tools-off LLM turn turns the transcript into a schema-valid brief, usually `medium_confidence` or `low_confidence`, with `why_not_confident` citing the time cap. If synthesis is disabled or fails, return `insufficient_data` + `halt_reason=wall_budget_exhausted`. |
 | Context exceeds 40k tokens | Token accounting in orchestration | Halt; return `verdict=insufficient_data` + `halt_reason=context_budget_exhausted` |
 | Prompt injection detected in fetched content | `injection_signals` populated by `fetch_company_page` | Content delimited but included (§7.1); output validator verifies no injected claims survived into brief |
@@ -546,7 +557,7 @@ Per-tool failure modes are in §4.1–§4.5. This section lists cross-cutting fa
 
 **Budgets (hard limits; orchestration halts on violation):**
 
-- **Max tool calls per run:** 12 (from §4.0)
+- **Max tool calls per run:** 13 (from §4.0)
 - **Max cost per run (USD):** $0.50 (matches §1 acceptance criterion)
 - **Max wall-clock per run (seconds):** 90 (matches §1 acceptance criterion)
 - **Max context tokens per turn:** 40,000 (headroom under the 50k threshold)
@@ -739,7 +750,7 @@ These are mirrored in §10 so they don't get lost.
 - Verdict-confidence calibration — expected `high_confidence` ↔ actual `high_confidence`
 - Latency p50 / p95 (target p95 ≤ 90s)
 - Cost per run (target ≤ $0.50)
-- Tool-call count (alert on > 10; hard budget = 12)
+- Tool-call count (alert on > 10; hard budget = 13)
 - Context-token usage (alert on > 35k)
 
 **CI gates:**
@@ -753,10 +764,15 @@ These are mirrored in §10 so they don't get lost.
 
 Of all briefs emitting `high_confidence`, ≥ 95% must match golden label. If the agent is confident, it should nearly always be right — makes the recall > precision trade-off measurable.
 
+**Playbook alignment** (reported + unit-tested; optional live golden keys):
+
+- `buyer_tier_confidence` should be `high` only when **at least two independent** tier-definition signals appear in the run trace (e.g. Tier 1: named PEO + DoD/NASA contract signal).
+- Hooks must not **open** with CMMC / NIST 800-171 / DFARS 7012 framing when the same hook is clearly **Cohort / PEO / workforce** context (sales playbook: CMMC belongs to Foundation). The output filter drops violating hooks and may downgrade verdict like other hook losses.
+
 ### §8.4 — Eval harness notes
 
 - Goldens and adversarials live in `evals/golden/*.json` and `evals/adversarial/*.json` as `{"input": {...}, "expected": {...}, "rationale": "..."}`.
-- Golden labels are **Track + verdict-confidence** only. Hooks are stochastic; they're evaluated by a rubric (citation exists, matches source, non-generic) rather than pinned to exact text. Rubric eval uses a small Claude call per hook.
+- Golden labels are **Track + verdict-confidence** by default; optional `expected.buyer_tier` / `expected.product_angle` keys may be added when stable. Hooks are stochastic; they're evaluated by a rubric (citation exists, matches source, non-generic) rather than pinned to exact text. Rubric eval uses a small Claude call per hook.
 - Adversarial cases have either a Track label (A1, A3, A4) or a safety outcome label (A2, A5).
 - v1 harness re-fetches live URLs each run — we accept drift as the cost of real-world data. v2 adds page snapshotting for deterministic replay (§10).
 - **Golden labels reviewed quarterly.** Drift in real-world classifications (Saronic, Hadrian, etc.) is tracked as a spec update, not an eval regression.

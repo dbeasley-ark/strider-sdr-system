@@ -1,6 +1,6 @@
-# Slop / quality review backlog
+# Code quality review backlog
 
-Carry-over from audit-first passes (AI slop remediation + lint/type hygiene). **Not** a commitment to implement everything here — triage and schedule.
+Carry-over from audit-first passes (personal **code quality review** skill: `~/.cursor/skills/code-quality-review/SKILL.md`, plus User Rules — see `~/.cursor/user-rules-code-quality-review.md` — plus lint/type hygiene). **Not** a commitment to implement everything here — triage and schedule.
 
 ---
 
@@ -18,7 +18,7 @@ Carry-over from audit-first passes (AI slop remediation + lint/type hygiene). **
 | **Ruff (~27 issues)** | E501 long lines, UP042 (`StrEnum`), N818 (exception `*Error` naming), ASYNC109 (`timeout` param on async), UP041 (`TimeoutError` vs `asyncio.TimeoutError`). | Run `uv run ruff check src tests`; apply `ruff check --fix` selectively; full pytest after each batch. |
 | **`StrEnum` / exception renames** | Style + consistency; watch for serialized enum values and `except` clauses if names change. | Grep call sites and tests for string literals. |
 | **`src/agent/agent.py` — broad `except Exception`** | Tool dispatch and loop glue swallow many failures into structured tool errors. | Narrow only with clear taxonomy + tests for each path. |
-| **Module-level `research()` / `run()`** | Convenience wrappers over `Agent`; not slop, but duplicate entry style. | Keep unless you want a single public API surface. |
+| **Module-level `research()` / `run()`** | Convenience wrappers over `Agent`; not a quality smell by itself, but duplicate entry style. | Keep unless you want a single public API surface. |
 | **`fetch_company_page.py` / `lookup_sam_registration.py`** | Still use `datetime.utcnow()` (same deprecation as awards tools had). | Same fix: `datetime.now(UTC)` + import `UTC`. |
 | **Mypy (~40 errors in 8 files)** | Registry generics, `openpyxl` stubs, `agent.py` message-block unions, Pydantic `Field(default_factory=...)` literal typing, etc. | `uv run mypy src/agent`; add stubs or types incrementally; do not “fix” with blanket ignores. |
 
@@ -41,12 +41,12 @@ Carry-over from audit-first passes (AI slop remediation + lint/type hygiene). **
 - **Tests are the reliable gate:** `uv run pytest` is green (106 tests). **Ruff and mypy are not green** on baseline — treat lint/type deltas as advisory until you decide to make them CI-blocking.
 - **No `AGENTS.md` / minimal CI config in-repo** for those gates; conventions live in `README.md` and `AGENT_SPEC.md`.
 - **SDK-heavy code (`agent.py`)** | Union types for Anthropic message blocks will keep mypy noisy until modeled with narrow helpers or typed narrowing.
-- **Optional UI path (`sales-ui/`)** | Not covered by the Python slop passes above; separate audit if you want the same comment / deprecation discipline there.
+- **Optional UI path (`sales-ui/`)** | Not covered by the Python code quality review passes above; separate audit if you want the same comment / deprecation discipline there.
 - **Cost / pricing map (`observability/cost.py`)** | Unknown model slugs intentionally fall back to Opus pricing — document in runbooks so ops does not assume “exact” dollars for new models.
 
 ---
 
-## How to use this file
+## How to use `code-quality-review.md`
 
 1. Pick one row under **Awaiting review**, branch, implement, pytest.
 2. Do **not** batch unrelated “cleanup” with behavior changes.

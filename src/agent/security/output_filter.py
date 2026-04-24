@@ -21,6 +21,7 @@ don't fully trust for security-critical decisions.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
@@ -28,6 +29,25 @@ from pydantic import HttpUrl
 
 from agent.brief import Brief, FederalPrimeAwardLine, PersonalizationHook, SalesConversationPrep
 from agent.security.compliance_keywords import Hit, Severity, has_hard_stop, scan
+
+# Opening text that references CMMC / NIST / DFARS must not lead hooks that are
+# clearly Cohort or commercial-PEO displacement messaging (sales playbook).
+_LEAD_COMPLIANCE = re.compile(
+    r"(?is)^[\s\"'(\[]*(\bcmmc\b|\bnist\s*800[- ]?171\b|\bdfars\s*7012\b)",
+)
+_WORKFORCE_VENDOR_CONTEXT = re.compile(
+    r"(?i)\b(cohort|peo|trinet|tri-net|insperity|rippling|justworks|sequoia|paychex|adp)\b",
+)
+
+
+def playbook_messaging_hook_violation(text: str) -> bool:
+    """True if a hook opens with compliance framing while addressing Cohort/PEO context."""
+    if not text or len(text.strip()) < 12:
+        return False
+    if not _WORKFORCE_VENDOR_CONTEXT.search(text):
+        return False
+    head = text.strip()[:120]
+    return bool(_LEAD_COMPLIANCE.match(head))
 
 
 class ComplianceHardStop(Exception):
@@ -97,10 +117,13 @@ def apply_filter(
     kept_hooks: list[PersonalizationHook] = []
     for hook in brief.hooks:
         url = str(hook.citation_url)
-        if _normalize_url(url) in allowed or _host_on_seed(url, seed_hosts):
-            kept_hooks.append(hook)
-        else:
+        if not (_normalize_url(url) in allowed or _host_on_seed(url, seed_hosts)):
             report.dropped_hooks.append((url, "url_not_in_trace"))
+            continue
+        if playbook_messaging_hook_violation(hook.text):
+            report.dropped_hooks.append((url, "playbook_messaging_violation"))
+            continue
+        kept_hooks.append(hook)
 
     downgraded_for_compliance = any(h.severity is Severity.WARN for h in hits)
     downgraded_for_hooks = (
@@ -151,6 +174,12 @@ def _serialize_for_scan(brief: Brief) -> str:
         brief.why_not_confident or "",
         brief.revenue_estimate.rationale,
     ]
+    if brief.buyer_tier_rationale:
+        parts.append(brief.buyer_tier_rationale)
+    parts.append(brief.buyer_tier)
+    parts.append(brief.product_angle)
+    parts.append(brief.suggested_contact_priority)
+    parts.append(brief.buyer_tier_confidence)
     parts.extend(r.rationale for r in brief.target_roles)
     parts.extend(r.title for r in brief.target_roles)
     parts.extend(h.text for h in brief.hooks)

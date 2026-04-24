@@ -132,7 +132,7 @@ def test_parse_brief_normalizes_halt_reason_wall_exceeded_alias() -> None:
         run_id="run-halt",
         company="Tanium",
         generated_at=datetime(2026, 4, 21, 12, 0, 0, tzinfo=timezone.utc),
-        max_tool_calls=12,
+        max_tool_calls=13,
     )
     assert err is None
     assert brief is not None

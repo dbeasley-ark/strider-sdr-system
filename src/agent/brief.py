@@ -23,6 +23,21 @@ Verdict = Literal[
     "insufficient_data",
 ]
 
+BuyerTier = Literal[
+    "tier_1_strike_zone",
+    "tier_2_displacement",
+    "tier_3_future_growth",
+    "unknown",
+]
+ProductAngle = Literal[
+    "foundation_primary",
+    "cohort_primary",
+    "foundation_then_cohort",
+    "unclear",
+]
+ContactPriority = Literal["p1", "p2", "p3", "unknown"]
+TierConfidence = Literal["high", "medium", "low", "unknown"]
+
 
 class PersonalizationHook(BaseModel):
     """A single outreach-ready hook the SDR can lead with.
@@ -226,7 +241,7 @@ class Brief(BaseModel):
     SDR in ≤60 seconds (per §1 goal).
     """
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.1"
     run_id: str
     generated_at: datetime
     confidentiality: Literal["internal_only"] = "internal_only"
@@ -241,6 +256,32 @@ class Brief(BaseModel):
 
     track: Track
     verdict: Verdict
+
+    buyer_tier: BuyerTier = Field(
+        default="unknown",
+        description=(
+            "Sales-playbook tier (orthogonal to Track): strike zone, "
+            "displacement, or SBIR growth motion."
+        ),
+    )
+    buyer_tier_rationale: str | None = Field(
+        default=None,
+        max_length=900,
+        description="Trace-backed rationale for buyer_tier; null when unknown.",
+    )
+    buyer_tier_confidence: TierConfidence = Field(
+        default="unknown",
+        description="high only with ≥2 independent tier signals in trace (per AGENT_SPEC §8).",
+    )
+    product_angle: ProductAngle = Field(
+        default="unclear",
+        description="Foundation vs Cohort lead for first conversation (playbook).",
+    )
+    suggested_contact_priority: ContactPriority = Field(
+        default="unknown",
+        description="P1 same-day only with multiple urgency signals; else unknown is honest.",
+    )
+
     why_not_confident: str | None = Field(
         default=None,
         max_length=800,

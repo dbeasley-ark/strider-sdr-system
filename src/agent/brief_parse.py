@@ -34,6 +34,54 @@ _HALT_REASON_ALIASES: dict[str, str] = {
     "context_budget_exceeded": "context_budget_exhausted",
 }
 
+_ALLOWED_BUYER_TIERS = frozenset(
+    {
+        "tier_1_strike_zone",
+        "tier_2_displacement",
+        "tier_3_future_growth",
+        "unknown",
+    }
+)
+_BUYER_TIER_ALIASES: dict[str, str] = {
+    "tier_1": "tier_1_strike_zone",
+    "strike_zone": "tier_1_strike_zone",
+    "tier1": "tier_1_strike_zone",
+    "tier_2": "tier_2_displacement",
+    "displacement": "tier_2_displacement",
+    "tier2": "tier_2_displacement",
+    "tier_3": "tier_3_future_growth",
+    "future_growth": "tier_3_future_growth",
+    "tier3": "tier_3_future_growth",
+    "sbir_growth": "tier_3_future_growth",
+}
+
+_ALLOWED_PRODUCT_ANGLES = frozenset(
+    {
+        "foundation_primary",
+        "cohort_primary",
+        "foundation_then_cohort",
+        "unclear",
+    }
+)
+_PRODUCT_ANGLE_ALIASES: dict[str, str] = {
+    "foundation": "foundation_primary",
+    "cohort": "cohort_primary",
+    "foundation_first": "foundation_then_cohort",
+    "foundation_then_cohort_primary": "foundation_then_cohort",
+}
+
+_ALLOWED_CONTACT_PRIORITY = frozenset({"p1", "p2", "p3", "unknown"})
+_CONTACT_PRIORITY_ALIASES: dict[str, str] = {
+    "priority_1": "p1",
+    "priority1": "p1",
+    "priority_2": "p2",
+    "priority2": "p2",
+    "priority_3": "p3",
+    "priority3": "p3",
+}
+
+_ALLOWED_TIER_CONFIDENCE = frozenset({"high", "medium", "low", "unknown"})
+
 _ALLOWED_REVENUE_SOURCES = frozenset(
     {
         "sec_filing",
@@ -87,6 +135,63 @@ def _normalize_halt_reason(raw: dict[str, Any]) -> None:
     raw["halt_reason"] = None
 
 
+def _normalize_enum_field(
+    raw: dict[str, Any],
+    key: str,
+    allowed: frozenset[str],
+    aliases: dict[str, str],
+    *,
+    fallback: str,
+) -> None:
+    val = raw.get(key)
+    if not isinstance(val, str):
+        return
+    s = val.strip()
+    if s in allowed:
+        raw[key] = s
+        return
+    k = _canonical_key(s)
+    if k in aliases:
+        raw[key] = aliases[k]
+        return
+    for a in allowed:
+        if _canonical_key(a) == k:
+            raw[key] = a
+            return
+    raw[key] = fallback
+
+
+def _normalize_playbook_fields(raw: dict[str, Any]) -> None:
+    _normalize_enum_field(
+        raw,
+        "buyer_tier",
+        _ALLOWED_BUYER_TIERS,
+        _BUYER_TIER_ALIASES,
+        fallback="unknown",
+    )
+    _normalize_enum_field(
+        raw,
+        "product_angle",
+        _ALLOWED_PRODUCT_ANGLES,
+        _PRODUCT_ANGLE_ALIASES,
+        fallback="unclear",
+    )
+    _normalize_enum_field(
+        raw,
+        "suggested_contact_priority",
+        _ALLOWED_CONTACT_PRIORITY,
+        _CONTACT_PRIORITY_ALIASES,
+        fallback="unknown",
+    )
+    _normalize_enum_field(
+        raw,
+        "buyer_tier_confidence",
+        _ALLOWED_TIER_CONFIDENCE,
+        {},
+        fallback="unknown",
+    )
+
+
 def _normalize_revenue_estimate_source(raw: dict[str, Any]) -> None:
     rev = raw.get("revenue_estimate")
     if not isinstance(rev, dict):
@@ -127,6 +232,7 @@ def _truncate_list_fields(raw: dict[str, Any]) -> None:
 def _normalize_brief_raw(raw: dict[str, Any]) -> None:
     _normalize_halt_reason(raw)
     _normalize_revenue_estimate_source(raw)
+    _normalize_playbook_fields(raw)
     _truncate_list_fields(raw)
 
 
