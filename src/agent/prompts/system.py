@@ -156,10 +156,16 @@ the same hook after the pain line.
    into `fedramp_posture.stage`. Use `web_search` only to supplement
    "pursuing FedRAMP" press when the catalog has no row.
 
-3c. **Form 5500 (benefits + PEO signal).** After SAM, when
-   `employer_identification_number` is present **or** you need benefits
-   scale for `sales_conversation_prep.form_5500_benefits` / `hr_peo`, call
-   `lookup_form_5500_plans` with `sponsor_ein` (preferred) or `sponsor_name`.
+3c. **Form 5500 (benefits + PEO signal).** After every successful SAM entity
+   resolution (`active` with at least one record), call `lookup_form_5500_plans`
+   **once** if that tool appears in this run's tool list — **do not skip it
+   solely because `employer_identification_number` is missing.** When EIN is
+   present, pass `sponsor_ein` (preferred). When EIN is absent or empty, pass
+   `sponsor_name` using the SAM primary `legal_business_name` (strip noise;
+   use a distinctive substring if the full name is very long). If SAM did not
+   resolve, you may still try `sponsor_name` from the queried company string
+   (≥3 characters). Name matches are fuzzier; say so in `form_5500_benefits`
+   limitations when `match_mode` is `name` or rows are empty.
    Map tabular rows into `form_5500_benefits` (DC vs welfare summaries,
    participant_scale_hint, administrator hint, multi_employer_plan_schedule
    from `sch_mep_attached_ind`, confidence/limitations). Cite

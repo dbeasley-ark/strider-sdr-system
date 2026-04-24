@@ -179,8 +179,11 @@ class LookupForm5500Plans(Tool[LookupForm5500PlansInput, LookupForm5500PlansOutp
     name = "lookup_form_5500_plans"
     description = (
         "Query the local EBSA Form 5500 FOIA SQLite index (tabular fields only). "
-        "Use after SAM when employer EIN is available, or pass sponsor_name when "
-        "EIN is missing (weaker). Returns recent 401(k)/pension vs welfare rows, "
+        "After SAM: pass sponsor_ein when employer_identification_number is known; "
+        "otherwise pass sponsor_name (≥3 chars) — case-insensitive substring match "
+        "on plan sponsor legal name (SAM legal_business_name or queried company). "
+        "EIN is higher confidence; name-only is still valid when EIN is redacted. "
+        "Returns recent 401(k)/pension vs welfare rows, "
         "participant counts, administrator vs sponsor fields, MEP schedule flag, "
         "and EFAST download URLs per Ack ID. Requires a pre-built index at "
         "AGENT_FORM_5500_DB_PATH (see scripts/form5500_build_index.py). "

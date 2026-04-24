@@ -86,6 +86,19 @@ async def test_lookup_form_5500_by_ein(tmp_path: Path, monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
+async def test_lookup_form_5500_by_sponsor_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db = tmp_path / "f5500-name.sqlite"
+    _make_sqlite(db)
+    monkeypatch.setattr(settings, "form_5500_db_path", db)
+
+    tool = LookupForm5500Plans()
+    out = await tool.run(LookupForm5500PlansInput(sponsor_name="Example Corp", max_rows=10))
+    assert out.error is None
+    assert out.match_mode == "name"
+    assert out.rows_returned == 2
+
+
+@pytest.mark.asyncio
 async def test_lookup_form_5500_missing_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     missing = tmp_path / "nope.sqlite"
     monkeypatch.setattr(settings, "form_5500_db_path", missing)
