@@ -76,16 +76,16 @@ export default function BriefCard({
                 {domain ? ` · ${domain}` : ""}
               </span>
               <span className="brief-card-tags">
-                {pres.track ? (
+                {pres.tiersDisplay ? (
                   <span className="brief-tag">
                     <span className="brief-tag-dot" />
-                    {pres.track}
+                    {pres.tiersDisplay}
                   </span>
                 ) : null}
-                {pres.verdict ? (
+                {pres.postureConfidenceDisplay || pres.verdict ? (
                   <span className="brief-tag brief-tag-verdict">
                     <span className="brief-tag-dot" />
-                    {pres.verdict}
+                    {pres.postureConfidenceDisplay ?? pres.verdict}
                   </span>
                 ) : null}
                 {pres.revBand ? <span className="brief-meta">{pres.revBand}</span> : null}
@@ -119,7 +119,7 @@ export default function BriefCard({
       <div id={bodyId} className="brief-card-body" hidden={!expanded}>
       {pres.why ? (
         <p className="brief-why muted">
-          <span className="brief-why-label">Confidence</span> {pres.why}
+          <span className="brief-why-label">Why not higher confidence</span> {pres.why}
         </p>
       ) : null}
 

@@ -48,6 +48,7 @@ def test_parse_brief_accepts_null_finalized_numerics() -> None:
     )
     assert err is None
     assert brief is not None
+    assert brief.federal_revenue_posture == "not_in_federal_icp"
     assert brief.wall_seconds == 0.0
     assert brief.cost_usd == 0.0
     assert brief.tool_calls_used == 0

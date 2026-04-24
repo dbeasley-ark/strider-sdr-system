@@ -1,8 +1,9 @@
 """Tool: lookup_sbir_awards (spec §4.5).
 
-Return SBIR / STTR phase awards for a company. Strong signal for Track 2
-(proactive federal posture) and for Phase III (sole-source follow-on,
-the single cleanest Track 1 discriminator for an early-stage company).
+Return SBIR / STTR phase awards for a company. Strong signal for
+``pre_sponsorship_path`` (proactive federal posture) and for Phase III
+(sole-source follow-on — the cleanest ``sponsorship_in_hand`` discriminator
+for an early-stage company).
 """
 
 from __future__ import annotations
@@ -102,11 +103,11 @@ class LookupSbirAwards(Tool[LookupSbirAwardsInput, LookupSbirAwardsOutput]):
     name = "lookup_sbir_awards"
     description = (
         "Look up SBIR / STTR awards for a company. Phase I/II indicate a "
-        "proactive federal posture (strong Track 2 signal); Phase III "
-        "(`phase_iii_count`) is the single cleanest Track 1 discriminator "
+        "proactive federal posture (strong pre_sponsorship_path signal); Phase III "
+        "(`phase_iii_count`) is the single cleanest sponsorship_in_hand discriminator "
         "for an early-stage company — Phase IIIs are sole-source follow-on "
         "contracts that don't need competitive solicitation. Zero SBIR is "
-        "NOT evidence against Track 1 — many large primes never did SBIR. "
+        "NOT evidence against sponsorship_in_hand — many large primes never did SBIR. "
         "Use this in parallel with USAspending, after SAM confirms the "
         "entity is active."
     )

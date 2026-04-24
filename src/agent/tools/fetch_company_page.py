@@ -40,7 +40,8 @@ _INJECTION_SIGNATURES: list[tuple[str, re.Pattern[str]]] = [
     ("role_injection", re.compile(r"<\|?(?:system|assistant|user)\|?>", re.IGNORECASE)),
     ("system_impersonation", re.compile(r"\b(system|assistant)\s*:\s*", re.IGNORECASE)),
     ("tool_hijack", re.compile(
-        r"\b(?:label|classify|rate)\s+(?:this\s+)?company\s+as\s+track[_ ]?[123]",
+        r"\b(?:label|classify|rate)\s+(?:this\s+)?company\s+as\s+(?:"
+        r"track[_ ]?[123]|sponsorship[_ ]?in[_ ]?hand|pre[_-]?sponsorship)",
         re.IGNORECASE,
     )),
     ("phantom_contract", re.compile(

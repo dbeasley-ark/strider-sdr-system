@@ -50,7 +50,7 @@ class EvalCase:
     name: str
     kind: str  # "golden" | "adversarial"
     input: dict[str, Any]           # {"company": ..., "domain": ...}
-    expected: dict[str, Any]        # track, verdict_minimum, etc.
+    expected: dict[str, Any]        # federal_revenue_posture, verdict_minimum, etc.
     rationale: str = ""
 
 
@@ -124,8 +124,13 @@ def _grade(
     notes: list[str] = []
     exp = case.expected
 
-    if "track" in exp and exp["track"] != brief.track:
-        failures.append(f"track={brief.track!r}, expected {exp['track']!r}")
+    if "federal_revenue_posture" in exp and exp["federal_revenue_posture"] != (
+        brief.federal_revenue_posture
+    ):
+        failures.append(
+            f"federal_revenue_posture={brief.federal_revenue_posture!r}, "
+            f"expected {exp['federal_revenue_posture']!r}"
+        )
 
     if "verdict_minimum" in exp:
         actual = _VERDICT_RANK.get(brief.verdict, -1)
@@ -181,7 +186,7 @@ def _grade(
         case=case,
         passed=not failures,
         brief_summary={
-            "track": brief.track,
+            "federal_revenue_posture": brief.federal_revenue_posture,
             "verdict": brief.verdict,
             "buyer_tier": brief.buyer_tier,
             "product_angle": brief.product_angle,
@@ -229,7 +234,7 @@ def report(results: list[EvalResult]) -> int:
     table.add_column("kind")
     table.add_column("name")
     table.add_column("pass")
-    table.add_column("track")
+    table.add_column("posture")
     table.add_column("verdict")
     table.add_column("cost $")
     table.add_column("wall s")
@@ -239,7 +244,7 @@ def report(results: list[EvalResult]) -> int:
             r.case.kind,
             r.case.name,
             "[green]PASS[/green]" if r.passed else "[red]FAIL[/red]",
-            str(r.brief_summary.get("track", "")),
+            str(r.brief_summary.get("federal_revenue_posture", "")),
             str(r.brief_summary.get("verdict", "")),
             f"{r.cost_usd:.4f}",
             f"{r.wall_seconds:.1f}",

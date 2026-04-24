@@ -10,7 +10,16 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from agent.agent import Agent, _assistant_turn_pending
+from datetime import UTC, datetime
+
+from anthropic.types import Message
+
+from agent.agent import (
+    Agent,
+    _assistant_turn_pending,
+    _container_id_from_message,
+    _last_assistant_has_pending_code_execution_tool,
+)
 from agent.config import settings
 from agent.tools.registry import ToolRegistry
 
@@ -32,7 +41,7 @@ def _minimal_brief_json(*, company_name_queried: str) -> str:
         "company_name_canonical": None,
         "domain": None,
         "uei": None,
-        "track": "neither",
+        "federal_revenue_posture": "not_in_federal_icp",
         "verdict": "low_confidence",
         "why_not_confident": "Wall-clock budget exhausted after transcript review.",
         "rationale": (
@@ -254,3 +263,51 @@ async def test_call_llm_omits_container_when_tools_disabled() -> None:
         container_id="cntr_fake",
     )
     assert create_mock.call_args.kwargs.get("container") == "cntr_fake"
+
+
+def test_last_assistant_pending_code_exec_detection() -> None:
+    assert not _last_assistant_has_pending_code_execution_tool([])
+    assert not _last_assistant_has_pending_code_execution_tool(
+        [{"role": "user", "content": "x"}]
+    )
+    assert not _last_assistant_has_pending_code_execution_tool(
+        [
+            {"role": "user", "content": "x"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "server_tool_use", "name": "web_search", "id": "a"}
+                ],
+            },
+        ]
+    )
+    assert _last_assistant_has_pending_code_execution_tool(
+        [
+            {"role": "user", "content": "x"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "server_tool_use", "name": "bash_code_execution", "id": "b"}
+                ],
+            },
+        ]
+    )
+
+
+def test_container_id_from_message_parses_top_level_container() -> None:
+    msg = Message.model_validate(
+        {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-4-7",
+            "stop_reason": "pause_turn",
+            "content": [],
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+            "container": {
+                "id": "cntr_from_api",
+                "expires_at": datetime(2026, 6, 1, tzinfo=UTC).isoformat(),
+            },
+        }
+    )
+    assert _container_id_from_message(msg) == "cntr_from_api"

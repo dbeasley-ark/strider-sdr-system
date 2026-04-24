@@ -173,6 +173,7 @@ def _serialize_for_scan(brief: Brief) -> str:
         brief.rationale,
         brief.why_not_confident or "",
         brief.revenue_estimate.rationale,
+        brief.federal_revenue_posture,
     ]
     if brief.buyer_tier_rationale:
         parts.append(brief.buyer_tier_rationale)
@@ -191,6 +192,14 @@ def _serialize_for_scan(brief: Brief) -> str:
         parts.append(sp.fedramp_posture.stage)
     if sp.hr_peo.provider_hint:
         parts.append(sp.hr_peo.provider_hint)
+    if sp.form_5500_benefits.dc_retirement_summary:
+        parts.append(sp.form_5500_benefits.dc_retirement_summary)
+    if sp.form_5500_benefits.group_health_welfare_summary:
+        parts.append(sp.form_5500_benefits.group_health_welfare_summary)
+    if sp.form_5500_benefits.administrator_or_service_provider_hint:
+        parts.append(sp.form_5500_benefits.administrator_or_service_provider_hint)
+    if sp.form_5500_benefits.limitations:
+        parts.append(sp.form_5500_benefits.limitations)
     if sp.last_funding.round_label:
         parts.append(sp.last_funding.round_label)
     for a in sp.federal_prime_awards:
@@ -244,6 +253,15 @@ def _filter_sales_conversation_prep_urls(
         update={"citation_url": _strip_bad_citation(hp.citation_url, "sales_prep.hr_peo")}
     )
 
+    f5 = prep.form_5500_benefits
+    new_f5 = f5.model_copy(
+        update={
+            "citation_url": _strip_bad_citation(
+                f5.citation_url, "sales_prep.form_5500_benefits"
+            ),
+        }
+    )
+
     lf = prep.last_funding
     new_lf = lf.model_copy(
         update={
@@ -268,6 +286,7 @@ def _filter_sales_conversation_prep_urls(
         what_they_do=new_wd,
         fedramp_posture=new_fp,
         hr_peo=new_hp,
+        form_5500_benefits=new_f5,
         last_funding=new_lf,
         federal_prime_awards=new_awards,
     )

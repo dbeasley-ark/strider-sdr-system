@@ -122,7 +122,7 @@ class LookupFedrampMarketplaceProducts(
         "company string (ideally post-SAM). "
         "**Zero matches is normal** — most companies are not listed; record "
         "`marketplace_resolution=no_marketplace_listing` and continue the full "
-        "brief (Track verdict, hooks, etc.). Never treat an empty match list as "
+        "brief (federal posture, hooks, etc.). Never treat an empty match list as "
         "a reason to stop or return `insufficient_data`. "
         "When matches exist, use `marketplace_status` as the **stage** for "
         "sales (Authorized / In Process / Ready / Agency In Process). "

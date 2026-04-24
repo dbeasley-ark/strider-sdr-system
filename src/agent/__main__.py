@@ -15,18 +15,28 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from rich.console import Console
+# Must run before importing `agent.config` (which materializes Settings).
+_argv_filtered: list[str] = []
+for _tok in sys.argv[1:]:
+    if _tok == "--form-5500-fetch-filings":
+        os.environ["AGENT_FORM_5500_FETCH_FILINGS"] = "true"
+    else:
+        _argv_filtered.append(_tok)
+sys.argv = [sys.argv[0], *_argv_filtered]
 
-from agent.agent import Agent
-from agent.brief import insufficient_data
-from agent.observability.tracing import new_run_dir, slugify
-from agent.tools import build_registry
+from rich.console import Console  # noqa: E402
+
+from agent.agent import Agent  # noqa: E402
+from agent.brief import insufficient_data  # noqa: E402
+from agent.observability.tracing import new_run_dir, slugify  # noqa: E402
+from agent.tools import build_registry  # noqa: E402
 
 stderr = Console(stderr=True)
 
@@ -57,7 +67,14 @@ def _build_progress(started: float):
 async def _main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m agent",
-        description="Arkenstone prospect-research agent — classify a company against Track 1 / Track 2 ICP.",
+        description=(
+            "Arkenstone prospect-research agent — federal revenue posture, "
+            "playbook buyer tier (Tier 1–3), and SDR-ready brief."
+        ),
+        epilog=(
+            "Optional: pass --form-5500-fetch-filings (before other flags) to enable "
+            "EFAST PDF filing fetch, or set AGENT_FORM_5500_FETCH_FILINGS=true."
+        ),
     )
     parser.add_argument(
         "--company",
@@ -123,8 +140,8 @@ async def _main(argv: list[str]) -> int:
         stderr.print(
             f"\n[bold]=== RESULT ===[/bold]\n"
             f"status:      {result.status}\n"
-            f"track:       {result.brief.track}\n"
-            f"verdict:     {result.brief.verdict}\n"
+            f"federal_revenue_posture: {result.brief.federal_revenue_posture}\n"
+            f"verdict:                  {result.brief.verdict}\n"
             f"tool calls:  {result.tool_calls_used}/{result.brief.tool_calls_budget}\n"
             f"wall:        {result.wall_seconds}s\n"
             f"cost:        ${result.cost_usd}\n"

@@ -21,7 +21,7 @@ def _minimal_brief(**overrides):
         run_id="r",
         generated_at=datetime.now(timezone.utc),
         company_name_queried="Shield AI",
-        track="track_1",
+        federal_revenue_posture="sponsorship_in_hand",
         verdict="high_confidence",
         rationale="Two-plus signals: SAM active + USAspending primes visible.",
         revenue_estimate=RevenueEstimate(
@@ -42,7 +42,7 @@ def _minimal_brief(**overrides):
 
 def test_minimal_brief_validates() -> None:
     b = _minimal_brief()
-    assert b.track == "track_1"
+    assert b.federal_revenue_posture == "sponsorship_in_hand"
 
 
 def test_hook_requires_citation_url() -> None:
@@ -64,7 +64,7 @@ def test_insufficient_data_helper() -> None:
         halt_reason="tool_budget_exhausted",
     )
     assert b.verdict == "insufficient_data"
-    assert b.track == "neither"
+    assert b.federal_revenue_posture == "not_in_federal_icp"
     assert b.halt_reason == "tool_budget_exhausted"
     assert b.hooks == []
     assert b.buyer_tier == "unknown"
@@ -93,6 +93,32 @@ def test_target_role_caps_hooks_at_8() -> None:
     ]
     with pytest.raises(ValidationError):
         _minimal_brief(hooks=hooks)
+
+
+def test_brief_accepts_legacy_track_key() -> None:
+    b = Brief.model_validate(
+        {
+            "schema_version": "1.1",
+            "run_id": "r",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "company_name_queried": "Co",
+            "track": "track_2",
+            "verdict": "medium_confidence",
+            "rationale": "x" * 50,
+            "revenue_estimate": {
+                "band": "unknown",
+                "source": "not_determinable",
+                "rationale": "y" * 40,
+            },
+            "target_roles": [],
+            "hooks": [],
+            "tool_calls_used": 1,
+            "tool_calls_budget": 13,
+            "wall_seconds": 1.0,
+            "cost_usd": 0.01,
+        }
+    )
+    assert b.federal_revenue_posture == "pre_sponsorship_path"
 
 
 def test_target_role_caps_at_5() -> None:

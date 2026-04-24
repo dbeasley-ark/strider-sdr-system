@@ -232,6 +232,13 @@ class Agent:
                             # resumes. Capture that before appending the synthesis user
                             # message (which would hide the trailing-assistant signal).
                             wall_synth_allow_tools = _assistant_turn_pending(messages)
+                            wall_synth_code_exec_needs_container = (
+                                wall_synth_allow_tools
+                                and _last_assistant_has_pending_code_execution_tool(
+                                    messages
+                                )
+                                and not container_id
+                            )
                             messages.append(
                                 {
                                     "role": "user",
@@ -247,6 +254,27 @@ class Agent:
                                 msg_count=len(messages),
                                 phase="wall_synthesis",
                             )
+                            if wall_synth_code_exec_needs_container:
+                                trace.event(
+                                    "wall_synthesis.missing_container_for_code_exec",
+                                    iteration=iterations,
+                                )
+                                return self._finalize_insufficient(
+                                    reason=(
+                                        f"{wall_reason}; cannot resume code-execution "
+                                        "pause without a container id from the API"
+                                    ),
+                                    halt_reason="wall_budget_exhausted",
+                                    status="halted_wall_budget",
+                                    run_id=run_id,
+                                    company=company,
+                                    started=started,
+                                    cost=cost,
+                                    iterations=iterations,
+                                    tool_calls=tool_calls_used,
+                                    trace=trace,
+                                    run_dir=run_dir,
+                                )
                             try:
                                 synth = await self._call_llm(
                                     messages,
@@ -276,10 +304,9 @@ class Agent:
                                     trace=trace,
                                     run_dir=run_dir,
                                 )
-                            new_container = getattr(synth, "container", None)
-                            new_container_id = getattr(new_container, "id", None)
-                            if new_container_id:
-                                container_id = new_container_id
+                            new_cid = _container_id_from_message(synth)
+                            if new_cid:
+                                container_id = new_cid
                             cost.add_usage(synth.usage)
                             trace.event(
                                 "llm.response",
@@ -426,7 +453,7 @@ class Agent:
                                 "agent.end",
                                 status="halted_wall_budget_synthesized",
                                 verdict=filtered.verdict,
-                                track=filtered.track,
+                                federal_revenue_posture=filtered.federal_revenue_posture,
                                 tool_calls_used=tool_calls_used,
                                 wall_s=filtered.wall_seconds,
                                 cost_usd=filtered.cost_usd,
@@ -532,15 +559,41 @@ class Agent:
                             wall_s=wall,
                         )
                     trace.event("llm.request", iteration=iterations, msg_count=len(messages))
+                    if (
+                        llm_allow_tools
+                        and _last_assistant_has_pending_code_execution_tool(messages)
+                        and not container_id
+                    ):
+                        trace.event(
+                            "halt.missing_container_for_code_exec",
+                            iteration=iterations,
+                        )
+                        return self._finalize_insufficient(
+                            reason=(
+                                "Cannot resume a code-execution server-tool pause: "
+                                "no container id was captured from the prior API response. "
+                                "Try upgrading the anthropic package; if it persists, "
+                                "report with trace.jsonl."
+                            ),
+                            halt_reason="internal_error",
+                            status="error",
+                            run_id=run_id,
+                            company=company,
+                            started=started,
+                            cost=cost,
+                            iterations=iterations,
+                            tool_calls=tool_calls_used,
+                            trace=trace,
+                            run_dir=run_dir,
+                        )
                     response = await self._call_llm(
                         messages,
                         allow_tools=llm_allow_tools,
                         container_id=container_id,
                     )
-                    new_container = getattr(response, "container", None)
-                    new_container_id = getattr(new_container, "id", None)
-                    if new_container_id:
-                        container_id = new_container_id
+                    new_cid = _container_id_from_message(response)
+                    if new_cid:
+                        container_id = new_cid
                     cost.add_usage(response.usage)
                     trace.event(
                         "llm.response",
@@ -720,7 +773,7 @@ class Agent:
                             "agent.end",
                             status="ok",
                             verdict=filtered.verdict,
-                            track=filtered.track,
+                            federal_revenue_posture=filtered.federal_revenue_posture,
                             tool_calls_used=tool_calls_used,
                             wall_s=filtered.wall_seconds,
                             cost_usd=filtered.cost_usd,
@@ -1069,6 +1122,28 @@ class Agent:
                             citation_urls.add(u)
                             allowlist.accept_citation(u)
 
+            if tool_name == "lookup_form_5500_plans" and isinstance(result, dict):
+                if "error" not in result:
+                    for key in ("datasets_citation_url", "efast_search_citation_url"):
+                        u = result.get(key)
+                        if isinstance(u, str) and u.startswith(("http://", "https://")):
+                            citation_urls.add(u)
+                            allowlist.accept_citation(u)
+                    for p in result.get("plans") or []:
+                        if not isinstance(p, dict):
+                            continue
+                        du = p.get("filing_download_url")
+                        if isinstance(du, str) and du.startswith(("http://", "https://")):
+                            citation_urls.add(du)
+                            allowlist.accept_citation(du)
+
+            if tool_name == "fetch_form_5500_filing_pdf" and isinstance(result, dict):
+                if "error" not in result:
+                    u = result.get("pdf_url")
+                    if isinstance(u, str) and u.startswith(("http://", "https://")):
+                        citation_urls.add(u)
+                        allowlist.accept_citation(u)
+
             _progress_for_tool(tool_name, result, emit)
 
             is_error = isinstance(result, dict) and _tool_payload_indicates_failure(
@@ -1201,15 +1276,78 @@ def _as_tool_result(tool_id: str, payload: Any, *, is_error: bool) -> dict[str, 
     }
 
 
+_CODE_EXEC_SERVER_TOOLS = frozenset(
+    {"code_execution", "bash_code_execution", "text_editor_code_execution"}
+)
+
+
+def _content_block_type_and_name(block: Any) -> tuple[str | None, str | None]:
+    t = getattr(block, "type", None)
+    name = getattr(block, "name", None)
+    if isinstance(block, dict):
+        if t is None:
+            t = block.get("type")
+        if name is None:
+            name = block.get("name")
+    ts = str(t) if t is not None else None
+    ns = str(name) if name is not None else None
+    return ts, ns
+
+
+def _last_assistant_has_pending_code_execution_tool(
+    messages: list[dict[str, Any]],
+) -> bool:
+    """True when the last message is assistant and includes code-exec server tools.
+
+    Those turns require ``container=`` on the next :meth:`Messages.create` when
+    ``tools`` is present; otherwise the API returns ``invalid_request_error`` about
+    ``container_id`` (see ``_assistant_turn_pending``).
+    """
+    if not _assistant_turn_pending(messages):
+        return False
+    content = messages[-1].get("content")
+    if not isinstance(content, list):
+        return False
+    for block in content:
+        typ, name = _content_block_type_and_name(block)
+        if typ == "server_tool_use" and name in _CODE_EXEC_SERVER_TOOLS:
+            return True
+    return False
+
+
+def _container_id_from_message(msg: Message) -> str | None:
+    """Best-effort ``container.id`` from a Messages API response."""
+    cont = getattr(msg, "container", None)
+    if cont is not None:
+        cid = getattr(cont, "id", None)
+        if isinstance(cid, str) and cid.strip():
+            return cid.strip()
+    extra = getattr(msg, "model_extra", None)
+    if isinstance(extra, dict):
+        raw = extra.get("container")
+        if isinstance(raw, dict):
+            rid = raw.get("id")
+            if isinstance(rid, str) and rid.strip():
+                return rid.strip()
+    try:
+        dumped = msg.model_dump(mode="python")
+    except Exception:
+        return None
+    c2 = dumped.get("container")
+    if isinstance(c2, dict):
+        rid = c2.get("id")
+        if isinstance(rid, str) and rid.strip():
+            return rid.strip()
+    return None
+
+
 def _assistant_turn_pending(messages: list[dict[str, Any]]) -> bool:
     """True when the last message is from the assistant.
 
     After ``stop_reason == "pause_turn"`` (native web_search / server tools), the
     client must call :meth:`Messages.create` again with the same ``tools`` list
-    and ``container`` id. The final-buffer path can set ``allow_tools=False``;
-    combining that with a trailing assistant omits ``container`` and triggers
-    ``invalid_request_error: container_id is required when there are pending tool
-    uses generated by code execution with tools``.
+    and, when code-execution server tools are pending, the same ``container`` id
+    (see Anthropic ``invalid_request_error`` about ``container_id``).
     """
     return bool(messages) and messages[-1].get("role") == "assistant"
 
@@ -1286,9 +1424,13 @@ def _brief_parse_repair_user_message(*, parse_error: str) -> str:
             f"Validation error: {parse_error}",
             "",
             "Fix the JSON and re-emit exactly one Brief object. Common fixes:",
+            "  • federal_revenue_posture — must be sponsorship_in_hand | "
+            "pre_sponsorship_path | not_in_federal_icp (do not use legacy `track`).",
             "  • revenue_estimate.source — use only allowed enum values (see prior "
             "system instructions).",
             "  • sales_conversation_prep.federal_prime_awards — at most 5 entries.",
+            "  • sales_conversation_prep.form_5500_benefits — use only allowed enums "
+            "for signal_source, participant_scale_hint, and confidence.",
             "  • target_roles ≤ 5, hooks ≤ 8.",
             "",
             "Do NOT call any tools. Emit only the corrected JSON object.",
@@ -1410,6 +1552,17 @@ def _progress_for_tool(
         inj = result.get("injection_signals") or []
         note = f" [injection:{','.join(inj)}]" if inj else ""
         emit(f"fetched: {u}{note}")
+    elif tool_name == "lookup_form_5500_plans":
+        n = result.get("rows_returned") or 0
+        mode = result.get("match_mode") or "?"
+        emit(f"Form 5500 index: {n} plan(s) ({mode})")
+    elif tool_name == "fetch_form_5500_filing_pdf":
+        err = result.get("error")
+        if err:
+            emit(f"Form 5500 PDF: error {err}")
+        else:
+            b = result.get("bytes_read") or 0
+            emit(f"Form 5500 PDF: {b} bytes, excerpt returned")
 
 
 async def research(

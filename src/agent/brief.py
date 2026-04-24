@@ -4,6 +4,14 @@ Every field here is load-bearing — the output validator rejects briefs
 that violate this schema, and the §7 threat model depends on certain
 fields (citations, verdict) being well-formed.
 
+Naming vs. ``docs/arkenstone_sales_playbook_master.docx``: Part 2 ICP uses
+**Tier 1–3** (Strike Zone, Displacement, Future Growth) — that is
+``buyer_tier``. ``federal_revenue_posture`` is a separate federal-revenue
+segmentation axis (sponsorship vs pre-sponsorship path) used for research;
+it is not called "Track" in the playbook. ``verdict`` is agent research
+confidence in that posture, not playbook P1–P3 (see
+``suggested_contact_priority``).
+
 Spec references: §1 (acceptance criteria), §7.1 (citation validation),
 §9 (confidence signaling).
 """
@@ -11,11 +19,43 @@ Spec references: §1 (acceptance criteria), §7.1 (citation validation),
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, model_validator
 
-Track = Literal["track_1", "track_2", "neither"]
+FederalRevenuePosture = Literal[
+    "sponsorship_in_hand",
+    "pre_sponsorship_path",
+    "not_in_federal_icp",
+]
+_LEGACY_TRACK_TO_POSTURE: dict[str, str] = {
+    "track_1": "sponsorship_in_hand",
+    "track_2": "pre_sponsorship_path",
+    "neither": "not_in_federal_icp",
+}
+
+
+def migrate_raw_brief_legacy_federal_posture(raw: dict[str, Any]) -> None:
+    """In-place: move legacy ``track`` / old enum strings to ``federal_revenue_posture``."""
+    frp = raw.get("federal_revenue_posture")
+    if isinstance(frp, str):
+        s = frp.strip()
+        if s in _LEGACY_TRACK_TO_POSTURE:
+            raw["federal_revenue_posture"] = _LEGACY_TRACK_TO_POSTURE[s]
+        raw.pop("track", None)
+        return
+    if "track" in raw:
+        t = raw.get("track")
+        if isinstance(t, str):
+            key = t.strip()
+            raw["federal_revenue_posture"] = _LEGACY_TRACK_TO_POSTURE.get(
+                key, key if key else "not_in_federal_icp"
+            )
+        else:
+            raw["federal_revenue_posture"] = "not_in_federal_icp"
+        del raw["track"]
+
+
 Verdict = Literal[
     "high_confidence",
     "medium_confidence",
@@ -82,7 +122,8 @@ class TargetRole(BaseModel):
 class RevenueEstimate(BaseModel):
     """Revenue-band estimate, honest about uncertainty.
 
-    ICP bands (§1): Track 1 $10M–$2B, Track 2 $50M–$2B.
+    Federal posture bands (product spec / agent rubric, not Part 2 tiers):
+    ``sponsorship_in_hand`` $10M–$2B, ``pre_sponsorship_path`` $50M–$2B.
     """
 
     band: Literal[
@@ -186,6 +227,58 @@ class HrPeoPrep(BaseModel):
     citation_url: HttpUrl | None = None
 
 
+ParticipantScaleHint = Literal["unknown", "lt_50", "50_200", "200_1000", "1000_plus"]
+Form5500SignalSource = Literal["unknown", "tabular_index", "tabular_plus_filing_pdf"]
+
+
+class Form5500BenefitsPrep(BaseModel):
+    """Form 5500 / EFAST2 tabular signal for benefits + PEO conversation prep."""
+
+    signal_source: Form5500SignalSource = Field(
+        default="unknown",
+        description="tabular_index from FOIA SQLite; tabular_plus_filing_pdf when PDF tool used.",
+    )
+    dc_retirement_summary: str | None = Field(
+        default=None,
+        max_length=500,
+        description="One or two sentences on pension/DC filing row(s) from tool output.",
+    )
+    group_health_welfare_summary: str | None = Field(
+        default=None,
+        max_length=500,
+        description="One or two sentences on welfare / group health row(s) from tool output.",
+    )
+    participant_scale_hint: ParticipantScaleHint = Field(
+        default="unknown",
+        description="Coarse scale from TOT_PARTCP_BOY_CNT / active counts in tabular tool.",
+    )
+    administrator_or_service_provider_hint: str | None = Field(
+        default=None,
+        max_length=200,
+        description=(
+            "Named plan administrator from Form 5500 ADMIN_NAME when distinct "
+            "from sponsor."
+        ),
+    )
+    multi_employer_plan_schedule: bool | None = Field(
+        default=None,
+        description="True when SCH_MEP_ATTACHED_IND indicates MEP schedule attached.",
+    )
+    citation_url: HttpUrl | None = Field(
+        default=None,
+        description="Trace-backed DOL datasets or EFAST citation from lookup_form_5500_plans.",
+    )
+    confidence: TierConfidence = Field(
+        default="unknown",
+        description="Confidence in summaries given EIN vs name match and row coverage.",
+    )
+    limitations: str | None = Field(
+        default=None,
+        max_length=500,
+        description="E.g. tabular-only (no PDF) or sponsor-name fuzzy match.",
+    )
+
+
 class LastFundingPrep(BaseModel):
     """Last observed funding event (public signal only)."""
 
@@ -216,6 +309,7 @@ class SalesConversationPrep(BaseModel):
     what_they_do: WhatTheyDoPrep = Field(default_factory=WhatTheyDoPrep)
     fedramp_posture: FedrampPosturePrep = Field(default_factory=FedrampPosturePrep)
     hr_peo: HrPeoPrep = Field(default_factory=HrPeoPrep)
+    form_5500_benefits: Form5500BenefitsPrep = Field(default_factory=Form5500BenefitsPrep)
     last_funding: LastFundingPrep = Field(default_factory=LastFundingPrep)
     federal_prime_awards: list[FederalPrimeAwardLine] = Field(
         default_factory=list,
@@ -229,6 +323,7 @@ def default_sales_conversation_prep() -> SalesConversationPrep:
         what_they_do=WhatTheyDoPrep(summary="Not gathered in this run.", citation_url=None),
         fedramp_posture=FedrampPosturePrep(status="unknown"),
         hr_peo=HrPeoPrep(status="unknown"),
+        form_5500_benefits=Form5500BenefitsPrep(signal_source="unknown"),
         last_funding=LastFundingPrep(confidence="unknown"),
         federal_prime_awards=[],
     )
@@ -241,7 +336,7 @@ class Brief(BaseModel):
     SDR in ≤60 seconds (per §1 goal).
     """
 
-    schema_version: Literal["1.0", "1.1"] = "1.1"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.2"
     run_id: str
     generated_at: datetime
     confidentiality: Literal["internal_only"] = "internal_only"
@@ -254,14 +349,22 @@ class Brief(BaseModel):
     domain: str | None = None
     uei: str | None = Field(default=None, pattern=r"^[A-Z0-9]{12}$")
 
-    track: Track
+    federal_revenue_posture: FederalRevenuePosture
     verdict: Verdict
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_track_to_posture(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            data = dict(data)
+            migrate_raw_brief_legacy_federal_posture(data)
+        return data
 
     buyer_tier: BuyerTier = Field(
         default="unknown",
         description=(
-            "Sales-playbook tier (orthogonal to Track): strike zone, "
-            "displacement, or SBIR growth motion."
+            "Playbook Part 2 tier (orthogonal to federal_revenue_posture): "
+            "Tier 1 Strike Zone, Tier 2 Displacement, Tier 3 Future Growth."
         ),
     )
     buyer_tier_rationale: str | None = Field(
@@ -295,7 +398,7 @@ class Brief(BaseModel):
         ...,
         min_length=40,
         max_length=2000,
-        description="2–4 sentence defense of the Track call, citing signals.",
+        description="2–4 sentence defense of the federal_revenue_posture call, citing signals.",
     )
 
     revenue_estimate: RevenueEstimate
@@ -363,7 +466,7 @@ def insufficient_data(
         run_id=run_id,
         generated_at=generated_at,
         company_name_queried=company_name_queried,
-        track="neither",
+        federal_revenue_posture="not_in_federal_icp",
         verdict="insufficient_data",
         why_not_confident=why,
         rationale=(

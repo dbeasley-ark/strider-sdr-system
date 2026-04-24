@@ -59,7 +59,7 @@ def test_apply_filter_drops_playbook_violation_hook() -> None:
         run_id="t",
         generated_at=datetime.now(UTC),
         company_name_queried="Example",
-        track="track_2",
+        federal_revenue_posture="pre_sponsorship_path",
         verdict="high_confidence",
         rationale=(
             "SAM active with SBIR history; enough to defend Track 2 with "
@@ -89,7 +89,7 @@ def test_apply_filter_drops_playbook_violation_hook() -> None:
 def test_parse_brief_normalizes_buyer_tier_alias() -> None:
     payload = {
         "schema_version": "1.1",
-        "track": "track_2",
+        "federal_revenue_posture": "pre_sponsorship_path",
         "verdict": "medium_confidence",
         "why_not_confident": "Single-pillar federal signal only.",
         "rationale": (

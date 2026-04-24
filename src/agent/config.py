@@ -62,6 +62,14 @@ class Settings(BaseSettings):
     runs_dir: Path = Field(default=Path("./runs"), alias="AGENT_RUNS_DIR")
     log_level: str = "INFO"
 
+    # Form 5500 FOIA tabular index (see scripts/form5500_build_index.py).
+    form_5500_db_path: Path = Field(
+        default=Path("data/form5500/index.sqlite"),
+        alias="AGENT_FORM_5500_DB_PATH",
+    )
+    # When true, registers fetch_form_5500_filing_pdf (EFAST public PDF download).
+    form_5500_fetch_filings: bool = Field(default=False, alias="AGENT_FORM_5500_FETCH_FILINGS")
+
     @property
     def trace_dir(self) -> Path:
         """Back-compat alias; everything lives under the run dir."""
@@ -140,6 +148,8 @@ if os.environ.get("_AGENT_SKIP_STARTUP_CHECKS") == "1":
         wall_no_tools_buffer_seconds=10,
         wall_synthesis_enabled=True,
         wall_synthesis_max_tokens=4096,
+        form_5500_db_path=Path("data/form5500/index.sqlite"),
+        form_5500_fetch_filings=False,
     )
 else:
     settings = Settings()  # type: ignore[call-arg]

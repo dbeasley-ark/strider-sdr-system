@@ -180,9 +180,14 @@ def _try_parse_brief_stdout(stdout_text: str) -> dict[str, Any] | None:
     decoder = json.JSONDecoder()
     candidates: list[dict[str, Any]] = []
 
+    def _looks_like_brief(obj: dict[str, Any]) -> bool:
+        return "verdict" in obj and (
+            "federal_revenue_posture" in obj or "track" in obj
+        )
+
     try:
         head = json.loads(s)
-        if isinstance(head, dict) and "track" in head and "verdict" in head:
+        if isinstance(head, dict) and _looks_like_brief(head):
             return head
     except json.JSONDecodeError:
         pass
@@ -194,7 +199,7 @@ def _try_parse_brief_stdout(stdout_text: str) -> dict[str, Any] | None:
             obj, _end = decoder.raw_decode(s, i)
         except json.JSONDecodeError:
             continue
-        if isinstance(obj, dict) and "track" in obj and "verdict" in obj:
+        if isinstance(obj, dict) and _looks_like_brief(obj):
             candidates.append(obj)
     return candidates[-1] if candidates else None
 
@@ -293,7 +298,8 @@ async def _run_batch(job_id: str) -> None:
                     "domain": row.domain,
                     "status": "ok",
                     "exit_code": proc.returncode,
-                    "track": brief.get("track"),
+                    "federal_revenue_posture": brief.get("federal_revenue_posture")
+                    or brief.get("track"),
                     "verdict": brief.get("verdict"),
                     "brief": brief,
                 },
@@ -330,7 +336,7 @@ async def _run_batch(job_id: str) -> None:
                 json.loads(stdout_text)
                 row.error = (
                     "Agent stdout was JSON but not a prospect brief "
-                    "(expected top-level track + verdict). Stderr tail:\n"
+                    "(expected federal_revenue_posture + verdict). Stderr tail:\n"
                     f"{hint}"
                 )
             except json.JSONDecodeError:
@@ -562,7 +568,8 @@ def _job_snapshot(job: BatchJob) -> dict[str, Any]:
                 "status": r.status,
                 "exit_code": r.exit_code,
                 "error": r.error,
-                "track": (r.brief or {}).get("track"),
+                "federal_revenue_posture": (r.brief or {}).get("federal_revenue_posture")
+                or (r.brief or {}).get("track"),
                 "verdict": (r.brief or {}).get("verdict"),
                 "brief": r.brief,
                 "run_dir": r.run_dir,

@@ -15,6 +15,7 @@ import {
   downloadJsonFile,
 } from "./exportBriefs";
 import { downloadBriefsExcel } from "./exportBriefsExcel";
+import { buildBriefPresentation } from "./briefPresentation";
 import { briefFeedToPdfInputs, downloadBriefPdfBundle } from "./pdf/downloadBriefPdf";
 
 type ApiRow = {
@@ -25,7 +26,7 @@ type ApiRow = {
 
 type RowView = ApiRow & {
   status: "pending" | "running" | "ok" | "error";
-  track?: string;
+  federalRevenuePosture?: string;
   verdict?: string;
   error?: string;
   brief?: Record<string, unknown> | null;
@@ -48,6 +49,7 @@ type StreamEvent =
       domain?: string | null;
       status: string;
       exit_code?: number;
+      federal_revenue_posture?: string;
       track?: string;
       verdict?: string;
       error?: string;
@@ -66,7 +68,7 @@ function applyEvent(rows: RowView[], ev: StreamEvent): RowView[] {
     const r = next.find((x) => x.index === ev.index);
     if (r) {
       r.status = ev.status === "ok" ? "ok" : "error";
-      r.track = ev.track;
+      r.federalRevenuePosture = ev.federal_revenue_posture ?? ev.track;
       r.verdict = ev.verdict;
       r.error = ev.error;
       if (ev.brief != null && typeof ev.brief === "object") {
@@ -171,6 +173,7 @@ export default function BatchWorkspace() {
                     company: string;
                     domain: string | null;
                     status: string;
+                    federal_revenue_posture?: string;
                     track?: string;
                     verdict?: string;
                     error?: string;
@@ -180,7 +183,7 @@ export default function BatchWorkspace() {
                     company: r.company,
                     domain: r.domain,
                     status: r.status as RowView["status"],
-                    track: r.track,
+                    federalRevenuePosture: r.federal_revenue_posture ?? r.track,
                     verdict: r.verdict,
                     error: r.error,
                     brief: r.brief ?? undefined,
@@ -557,8 +560,8 @@ export default function BatchWorkspace() {
                   <th>Company</th>
                   <th>Domain hint</th>
                   <th>Status</th>
-                  <th>Track</th>
-                  <th>Verdict</th>
+                  <th>Tiers</th>
+                  <th>Research confidence</th>
                 </tr>
               </thead>
               <tbody>
@@ -578,8 +581,18 @@ export default function BatchWorkspace() {
                         </span>
                       ) : null}
                     </td>
-                    <td>{r.track ?? "—"}</td>
-                    <td>{r.verdict ?? "—"}</td>
+                    <td>
+                      {r.status === "ok" && r.brief
+                        ? buildBriefPresentation(r.brief).tiersDisplay ?? "—"
+                        : "—"}
+                    </td>
+                    <td>
+                      {r.status === "ok" && r.brief
+                        ? buildBriefPresentation(r.brief).postureConfidenceDisplay ??
+                          r.verdict ??
+                          "—"
+                        : (r.verdict ?? "—").replace(/_/g, " ")}
+                    </td>
                   </tr>
                 ))}
               </tbody>

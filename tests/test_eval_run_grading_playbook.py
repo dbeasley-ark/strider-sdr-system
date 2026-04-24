@@ -15,7 +15,7 @@ def _brief(**overrides: Any) -> Brief:
         "run_id": "eval-test",
         "generated_at": datetime.now(UTC),
         "company_name_queried": "Acme",
-        "track": "track_2",
+        "federal_revenue_posture": "pre_sponsorship_path",
         "verdict": "high_confidence",
         "rationale": (
             "SAM active with SBIR Phase II history and moderate USAspending — "

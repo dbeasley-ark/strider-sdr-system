@@ -7,9 +7,12 @@ it's a server-side Anthropic tool, attached directly in `Agent._call_llm`.
 
 from __future__ import annotations
 
+from agent.config import settings
 from agent.tools._base import Tool, ToolContractError, ToolExecutionError
 from agent.tools.fetch_company_page import FetchCompanyPage
+from agent.tools.fetch_form_5500_filing_pdf import FetchForm5500FilingPdf
 from agent.tools.lookup_fedramp_marketplace_products import LookupFedrampMarketplaceProducts
+from agent.tools.lookup_form_5500_plans import LookupForm5500Plans
 from agent.tools.lookup_sam_registration import LookupSamRegistration
 from agent.tools.lookup_sbir_awards import LookupSbirAwards
 from agent.tools.lookup_usaspending_awards import LookupUSAspendingAwards
@@ -17,7 +20,9 @@ from agent.tools.registry import ToolRegistry
 
 __all__ = [
     "FetchCompanyPage",
+    "FetchForm5500FilingPdf",
     "LookupFedrampMarketplaceProducts",
+    "LookupForm5500Plans",
     "LookupSamRegistration",
     "LookupSbirAwards",
     "LookupUSAspendingAwards",
@@ -39,5 +44,8 @@ def build_registry() -> ToolRegistry:
     registry.register(LookupUSAspendingAwards())
     registry.register(LookupSbirAwards())
     registry.register(LookupFedrampMarketplaceProducts())
+    registry.register(LookupForm5500Plans())
     registry.register(FetchCompanyPage())
+    if settings.form_5500_fetch_filings:
+        registry.register(FetchForm5500FilingPdf())
     return registry

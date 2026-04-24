@@ -17,6 +17,7 @@ import pytest
 from agent.brief import (
     Brief,
     FedrampPosturePrep,
+    Form5500BenefitsPrep,
     PersonalizationHook,
     RevenueEstimate,
     SalesConversationPrep,
@@ -39,7 +40,7 @@ def _base_brief(
         company_name_canonical="SHIELD AI",
         domain="shield.ai",
         uei="KXN8C4WDQK92",
-        track="track_1",
+        federal_revenue_posture="sponsorship_in_hand",
         verdict=verdict,  # type: ignore[arg-type]
         why_not_confident=None,
         rationale=rationale,
@@ -209,6 +210,27 @@ def test_sales_prep_citation_dropped_when_not_in_trace() -> None:
     )
     assert filtered.sales_conversation_prep.what_they_do.citation_url is None
     assert str(filtered.sales_conversation_prep.fedramp_posture.citation_url) == good
+    assert any("evil.com" in u for u, _ in report.dropped_sp_citations)
+
+
+def test_form_5500_benefits_citation_dropped_when_not_in_trace() -> None:
+    dol = "https://www.dol.gov/agencies/ebsa/about-ebsa/our-activities/public-disclosure/foia/form-5500-datasets"
+    sp = SalesConversationPrep(
+        form_5500_benefits=Form5500BenefitsPrep(
+            signal_source="tabular_index",
+            dc_retirement_summary="Synthetic DC row.",
+            citation_url="https://evil.com/fake-5500",
+        ),
+    )
+    brief = _base_brief()
+    brief = brief.model_copy(update={"sales_conversation_prep": sp})
+    filtered, report = apply_filter(
+        brief,
+        fetched_urls=set(),
+        citation_urls={dol},
+        seed_hosts=set(),
+    )
+    assert filtered.sales_conversation_prep.form_5500_benefits.citation_url is None
     assert any("evil.com" in u for u, _ in report.dropped_sp_citations)
 
 

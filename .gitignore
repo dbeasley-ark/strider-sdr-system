@@ -22,6 +22,9 @@ traces/
 eval_results/
 *.jsonl.gz
 
+# Form 5500 local FOIA index (build with scripts/form5500_build_index.py)
+data/form5500/*.sqlite
+
 # Agent run output and sales UI
 runs/
 sales-ui/node_modules/

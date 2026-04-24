@@ -65,6 +65,11 @@ class LookupSamRegistrationInput(BaseModel):
 class SamEntityRecord(BaseModel):
     uei: str
     legal_business_name: str
+    employer_identification_number: str | None = Field(
+        default=None,
+        pattern=r"^\d{9}$",
+        description="Public EIN when SAM returns taxpayerIdentificationType=EIN (type 2).",
+    )
     cage_code: str | None = None
     registration_status: Literal[
         "active", "inactive", "expired", "submitted", "work_in_progress"
@@ -282,9 +287,22 @@ def _parse_entity(entity: dict[str, Any]) -> SamEntityRecord | None:
 
         biz = (entity.get("assertions", {}) or {}).get("entityInformation", {}) or {}
 
+        ein_digits: str | None = None
+        tin_raw = reg.get("taxpayerIdentificationNumber")
+        tin_type = str(
+            reg.get("taxpayerIdentificationType")
+            or reg.get("taxPayerIdentificationType")
+            or ""
+        ).strip()
+        if tin_raw and tin_type in {"2", "EIN"}:
+            digits = "".join(c for c in str(tin_raw) if c.isdigit())
+            if len(digits) >= 9:
+                ein_digits = digits[-9:].zfill(9)
+
         return SamEntityRecord(
             uei=uei,
             legal_business_name=reg.get("legalBusinessName", "") or "",
+            employer_identification_number=ein_digits,
             cage_code=reg.get("cageCode"),
             registration_status=status,
             registration_date=_parse_date(reg.get("registrationDate")),

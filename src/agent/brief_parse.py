@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from agent.brief import Brief
+from agent.brief import Brief, migrate_raw_brief_legacy_federal_posture
 
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
 
@@ -230,6 +230,7 @@ def _truncate_list_fields(raw: dict[str, Any]) -> None:
 
 
 def _normalize_brief_raw(raw: dict[str, Any]) -> None:
+    migrate_raw_brief_legacy_federal_posture(raw)
     _normalize_halt_reason(raw)
     _normalize_revenue_estimate_source(raw)
     _normalize_playbook_fields(raw)

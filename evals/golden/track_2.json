@@ -2,19 +2,19 @@
   {
     "name": "G4_second_front",
     "input": {"company": "Second Front Systems", "domain": "secondfront.com"},
-    "expected": {"track": "track_2", "verdict_minimum": "high_confidence"},
+    "expected": {"federal_revenue_posture": "pre_sponsorship_path", "verdict_minimum": "high_confidence"},
     "rationale": "Game Warden ATO platform; IL5/IL6; FedRAMP path; no dominant single-prime sponsor."
   },
   {
     "name": "G5_govini",
     "input": {"company": "Govini", "domain": "govini.com"},
-    "expected": {"track": "track_2", "verdict_minimum": "high_confidence"},
+    "expected": {"federal_revenue_posture": "pre_sponsorship_path", "verdict_minimum": "high_confidence"},
     "rationale": "Ark platform for federal-spend analytics; FedRAMP-authorized; commercial + federal."
   },
   {
     "name": "G6_firestorm",
     "input": {"company": "Firestorm Labs", "domain": "firestormlabs.com"},
-    "expected": {"track": "track_2", "verdict_minimum": "low_confidence"},
+    "expected": {"federal_revenue_posture": "pre_sponsorship_path", "verdict_minimum": "low_confidence"},
     "rationale": "Rapidly-growing drone mfg; SBIR to recent AF contracts; pre-sponsorship dominance."
   }
 ]

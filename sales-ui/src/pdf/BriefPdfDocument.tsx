@@ -172,9 +172,11 @@ function BriefBody({ input }: { input: BriefPdfInput }) {
         {domain ? ` · ${domain}` : ""}
       </Text>
       <View style={styles.tagRow}>
-        {pres.track ? <Text style={styles.tag}>{pres.track}</Text> : null}
-        {pres.verdict ? (
-          <Text style={[styles.tag, styles.tagVerdict]}>{pres.verdict}</Text>
+        {pres.tiersDisplay ? <Text style={styles.tag}>{pres.tiersDisplay}</Text> : null}
+        {pres.postureConfidenceDisplay || pres.verdict ? (
+          <Text style={[styles.tag, styles.tagVerdict]}>
+            {pres.postureConfidenceDisplay ?? pres.verdict}
+          </Text>
         ) : null}
         {pres.revBand ? <Text style={styles.meta}>{pres.revBand}</Text> : null}
         {pres.wallSeconds !== undefined && pres.costUsd !== undefined ? (
@@ -186,7 +188,7 @@ function BriefBody({ input }: { input: BriefPdfInput }) {
 
       {pres.why ? (
         <Text style={styles.why}>
-          <Text style={{ fontWeight: 700 }}>Confidence </Text>
+          <Text style={{ fontWeight: 700 }}>Why not higher confidence </Text>
           {pres.why}
         </Text>
       ) : null}

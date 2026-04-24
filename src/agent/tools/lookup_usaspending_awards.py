@@ -1,7 +1,7 @@
 """Tool: lookup_usaspending_awards (spec §4.3).
 
 Return federal prime awards (contracts, IDVs) for a resolved company —
-the strongest single Track 1 signal. Public API, no key required.
+the strongest single ``sponsorship_in_hand`` signal. Public API, no key required.
 
 No sub-awards in v1 (§4.3 scope decision). Logged as §10 gap.
 """
@@ -40,7 +40,10 @@ class LookupUSAspendingAwardsInput(BaseModel):
     )
     lookback_years: int = Field(
         default=3, ge=1, le=10,
-        description="How far back to look. 3 is the default; extend to 5 for close-call Track 2 verdicts.",
+        description=(
+            "How far back to look. 3 is the default; extend to 5 for close-call "
+            "pre_sponsorship_path classifications."
+        ),
     )
     award_types: list[Literal["contract", "idv"]] = Field(
         default_factory=lambda: ["contract", "idv"],
@@ -95,11 +98,11 @@ class LookupUSAspendingAwards(
     name = "lookup_usaspending_awards"
     description = (
         "Look up federal prime awards (contracts + IDVs) for a company "
-        "over a lookback window. Strongest single Track 1 signal — "
+        "over a lookback window. Strongest single sponsorship_in_hand signal — "
         "multiple active DoD primes + recent award activity is the "
         "cleanest positive indicator. Empty result is ALSO signal: a "
-        "Track 1 candidate with zero federal primes is probably not "
-        "Track 1. UEI match is preferred; name-only is conservative "
+        "sponsorship_in_hand candidate with zero federal primes is probably not "
+        "sponsorship_in_hand. UEI match is preferred; name-only is conservative "
         "(fuzzy threshold 92) to avoid confusing similarly-named "
         "companies. Does NOT query sub-awards in v1. The tool fans out "
         "one request per award-type group (contracts vs. IDVs) "
